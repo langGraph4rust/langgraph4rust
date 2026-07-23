@@ -216,7 +216,9 @@ impl<S: AgentState> StateGraph<S> {
             if !self.is_start_node(current.clone())? {
                 let nodes = self.get_node_by_keys(&current)?;
                 if nodes.is_empty() {
-                    break;
+                    return Err(LangGraphError::NotFound(
+                        format!("Dead-end: nodes {:?} have no find by keys", current),
+                    ));
                 }
                 for node in nodes {
                     node.apply(state)?;
@@ -232,4 +234,12 @@ impl<S: AgentState> StateGraph<S> {
         }
         Ok(())
     }
+
+    fn batch_apply(&self,nodes:Vec<&Box<dyn AgentNode<S>>>, state: &mut S) -> Result<(), LangGraphError> {
+        for node in nodes {
+            node.apply(state)?;
+        }
+        Ok(())
+    }
+
 }
