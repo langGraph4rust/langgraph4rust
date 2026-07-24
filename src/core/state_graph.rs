@@ -2,6 +2,9 @@ use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
+use tokio::task::JoinSet;
 
 pub const START_NODE: &str = "__start__";
 pub const END_NODE: &str = "__end__";
@@ -220,9 +223,9 @@ impl<S: AgentState> StateGraph<S> {
                         format!("Dead-end: nodes {:?} have no find by keys", current),
                     ));
                 }
-                for node in nodes {
-                    node.apply(state)?;
-                }
+                // for node in nodes {
+                //     node.apply(state)?;
+                // }
             }
             let next = self.get_next_node_key(&current, state)?;
             if next.is_empty() {
@@ -235,10 +238,17 @@ impl<S: AgentState> StateGraph<S> {
         Ok(())
     }
 
-    fn batch_apply(&self,nodes:Vec<&Box<dyn AgentNode<S>>>, state: &mut S) -> Result<(), LangGraphError> {
-        for node in nodes {
-            node.apply(state)?;
-        }
+    async fn batch_apply(
+        &self,
+        nodes: Vec<Box<dyn AgentNode<S>>>,
+        state: S,
+    ) -> Result<(), LangGraphError>
+    {
+        let mut batch_tasks: JoinSet<Result<(), LangGraphError>> = JoinSet::new();
+        nodes.into_iter().for_each(|node| {
+            let ret = node.apply(state);
+            batch_tasks.spawn(ret);
+        });
         Ok(())
     }
 

@@ -1,13 +1,13 @@
-use std::collections::HashMap;
 use std::error::Error;
-use serde_json::Value;
+use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
+use async_trait::async_trait;
+
 
 pub trait AgentNode<S: AgentState> {
-    fn apply(&self, state: &mut S) -> Result<(), LangGraphError>;
+    fn apply(&self, state: S) -> Result<(), LangGraphError>;
     
-    fn fallback(&self, state: &mut S, error: &(dyn Error)) -> Result<HashMap<String, Value>, LangGraphError> {
-        Err(LangGraphError::NodeError(error.to_string().into()))
-    }
+    fn fallback(&self, state: S, error: &(dyn Error)) -> Result<(), LangGraphError>;
 }
