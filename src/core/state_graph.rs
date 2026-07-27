@@ -223,9 +223,7 @@ impl<S: AgentState> StateGraph<S> {
                         format!("Dead-end: nodes {:?} have no find by keys", current),
                     ));
                 }
-                // for node in nodes {
-                //     node.apply(state)?;
-                // }
+                self.batch_apply(nodes, state)?;
             }
             let next = self.get_next_node_key(&current, state)?;
             if next.is_empty() {
@@ -251,5 +249,4 @@ impl<S: AgentState> StateGraph<S> {
         });
         Ok(())
     }
-
 }
