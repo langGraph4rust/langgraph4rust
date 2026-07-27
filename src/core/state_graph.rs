@@ -50,20 +50,22 @@ impl<S: AgentState> StateGraphBuilder<S> {
         self
     }
 
-    pub fn add_edge(&mut self, from: &str, to:HashSet<String>) -> &mut Self {
+    pub fn add_edge(&mut self, from: &str, to: HashSet<String>) -> &mut Self {
         self.edges.insert(from.to_string(), to);
         self
     }
 
-    pub fn add_conditional_edge<F>(&mut self, from: &str, routers: HashSet<Box<dyn Fn(&S) -> String>>) -> &mut Self
-    {
+    pub fn add_conditional_edge<F>(
+        &mut self,
+        from: &str,
+        routers: HashSet<Box<dyn Fn(&S) -> String>>,
+    ) -> &mut Self {
         self.conditional_edges.insert(from.to_string(), routers);
         self
     }
 
     pub fn set_start_node(&mut self, start_node: &str) -> &mut Self {
-        self.start_node =
-            start_node.to_string();
+        self.start_node = start_node.to_string();
         self
     }
 
@@ -76,30 +78,39 @@ impl<S: AgentState> StateGraphBuilder<S> {
     pub fn compile(self) -> Result<StateGraph<S>, LangGraphError> {
         // 1. 节点不能为空
         if self.nodes.is_empty() {
-            return Err(LangGraphError::GraphError("Graph must contain at least one node".to_string()));
+            return Err(LangGraphError::GraphError(
+                "Graph must contain at least one node".to_string(),
+            ));
         }
 
         // 2. start_node 必须有出边（静态边或条件边）
         let start_has_edge = self.edges.contains_key(&self.start_node)
             || self.conditional_edges.contains_key(&self.start_node);
         if !start_has_edge {
-            return Err(LangGraphError::GraphError(
-                format!("Start node '{}' must have at least one outgoing edge", self.start_node),
-            ));
+            return Err(LangGraphError::GraphError(format!(
+                "Start node '{}' must have at least one outgoing edge",
+                self.start_node
+            )));
         }
 
         // 3. 静态边的源/目标必须是已注册节点（或 START_NODE/END_NODE）
         for (from, targets) in &self.edges {
-            if from != &self.start_node && from != &self.end_node && !self.nodes.contains_key(from) {
-                return Err(LangGraphError::GraphError(
-                    format!("Static edge source '{}' is not a registered node", from),
-                ));
+            if from != &self.start_node && from != &self.end_node && !self.nodes.contains_key(from)
+            {
+                return Err(LangGraphError::GraphError(format!(
+                    "Static edge source '{}' is not a registered node",
+                    from
+                )));
             }
             for target in targets {
-                if target != &self.start_node && target != &self.end_node && !self.nodes.contains_key(target) {
-                    return Err(LangGraphError::GraphError(
-                        format!("Static edge target '{}' (from '{}') is not a registered node", target, from),
-                    ));
+                if target != &self.start_node
+                    && target != &self.end_node
+                    && !self.nodes.contains_key(target)
+                {
+                    return Err(LangGraphError::GraphError(format!(
+                        "Static edge target '{}' (from '{}') is not a registered node",
+                        target, from
+                    )));
                 }
             }
         }
@@ -107,18 +118,20 @@ impl<S: AgentState> StateGraphBuilder<S> {
         // 4. 条件边的源必须是已注册节点（或 START_NODE）
         for from in self.conditional_edges.keys() {
             if from != &self.start_node && !self.nodes.contains_key(from) {
-                return Err(LangGraphError::GraphError(
-                    format!("Conditional edge source '{}' is not a registered node", from),
-                ));
+                return Err(LangGraphError::GraphError(format!(
+                    "Conditional edge source '{}' is not a registered node",
+                    from
+                )));
             }
         }
 
         // 5. 同一节点禁止同时配置静态边和条件边
         for from in self.edges.keys() {
             if self.conditional_edges.contains_key(from) {
-                return Err(LangGraphError::GraphError(
-                    format!("Node '{}' cannot have both static edges and conditional edges", from),
-                ));
+                return Err(LangGraphError::GraphError(format!(
+                    "Node '{}' cannot have both static edges and conditional edges",
+                    from
+                )));
             }
         }
 
@@ -133,16 +146,20 @@ impl<S: AgentState> StateGraphBuilder<S> {
     }
 }
 
-
 impl<S: AgentState> StateGraph<S> {
     /// 执行图：从 start_node 开始，依次执行节点直到 end_node
 
     fn get_node_by_key(&self, key: &String) -> Result<&Box<dyn AgentNode<S>>, LangGraphError> {
-
-        Ok(self.nodes.get(key).ok_or_else(|| LangGraphError::NotFound(format!("Key '{}' not found", key)))?)
+        Ok(self
+            .nodes
+            .get(key)
+            .ok_or_else(|| LangGraphError::NotFound(format!("Key '{}' not found", key)))?)
     }
 
-    fn get_node_by_keys(&self, keys: &HashSet<String>) -> Result<Vec<&Box<dyn AgentNode<S>>>, LangGraphError> {
+    fn get_node_by_keys(
+        &self,
+        keys: &HashSet<String>,
+    ) -> Result<Vec<&Box<dyn AgentNode<S>>>, LangGraphError> {
         let mut nodes = Vec::new();
         for key in keys {
             let node = self.get_node_by_key(key)?;
@@ -171,7 +188,11 @@ impl<S: AgentState> StateGraph<S> {
         Ok(false)
     }
 
-    fn  get_next_node_key(&self, keys: &HashSet<String>, state: &S) -> Result<HashSet<String>, LangGraphError> {
+    fn get_next_node_key(
+        &self,
+        keys: &HashSet<String>,
+        state: &S,
+    ) -> Result<HashSet<String>, LangGraphError> {
         if keys.is_empty() {
             return Ok(HashSet::new());
         }
@@ -188,9 +209,10 @@ impl<S: AgentState> StateGraph<S> {
                 for router in routers {
                     let target = router(state);
                     if target != END_NODE && !self.nodes.contains_key(&target) {
-                        return Err(LangGraphError::GraphError(
-                            format!("Conditional edge from '{}' returned invalid target '{}'", key, target),
-                        ));
+                        return Err(LangGraphError::GraphError(format!(
+                            "Conditional edge from '{}' returned invalid target '{}'",
+                            key, target
+                        )));
                     }
                     next_node_keys.insert(target);
                 }
@@ -198,7 +220,7 @@ impl<S: AgentState> StateGraph<S> {
         }
         Ok(next_node_keys)
     }
-    pub async fn invoke(&self,state: Arc<S>) -> Result<(), LangGraphError> {
+    pub async fn invoke(&self, state: Arc<S>) -> Result<(), LangGraphError> {
         let mut current = HashSet::new();
         current.insert(self.start_node.to_string());
 
@@ -207,7 +229,7 @@ impl<S: AgentState> StateGraph<S> {
 
         loop {
             if step_count > max_steps {
-                break
+                break;
             }
             step_count = step_count + 1;
             if self.is_end_node(current.clone())? {
@@ -219,34 +241,42 @@ impl<S: AgentState> StateGraph<S> {
             if !self.is_start_node(current.clone())? {
                 let nodes = self.get_node_by_keys(&current)?;
                 if nodes.is_empty() {
-                    return Err(LangGraphError::NotFound(
-                        format!("Dead-end: nodes {:?} have no find by keys", current),
-                    ));
+                    return Err(LangGraphError::NotFound(format!(
+                        "Dead-end: nodes {:?} have no find by keys",
+                        current
+                    )));
                 }
                 self.batch_apply(nodes, Arc::clone(&state)).await?;
             }
             let next = self.get_next_node_key(&current, state)?;
             if next.is_empty() {
-                return Err(LangGraphError::GraphError(
-                    format!("Dead-end: nodes {:?} have no outgoing edges", current),
-                ));
+                return Err(LangGraphError::GraphError(format!(
+                    "Dead-end: nodes {:?} have no outgoing edges",
+                    current
+                )));
             }
             current = next;
         }
         Ok(())
     }
 
+
     async fn batch_apply(
         &self,
         nodes: Vec<&Box<dyn AgentNode<S>>>,
-        state: Arc<S>
-    ) -> Result<(), LangGraphError>
-    {
+        state: Arc<S>,
+    ) -> Result<(), LangGraphError> {
         let mut batch_tasks: JoinSet<Result<(), LangGraphError>> = JoinSet::new();
         for node in nodes {
             let ret = ready(node.apply(Arc::clone(&state)));
             batch_tasks.spawn(ret);
-        };
+        }
+        let results = batch_tasks.join_all().await;
+        for result in results {
+            if let Err(e) = result {
+                return Err(e);
+            }
+        }
         Ok(())
     }
 }
