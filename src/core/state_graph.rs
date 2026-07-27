@@ -248,14 +248,22 @@ impl<S: AgentState> StateGraph<S> {
                 }
                 self.batch_apply(nodes, Arc::clone(&state)).await?;
             }
-            let next = self.get_next_node_key(&current, state)?;
-            if next.is_empty() {
-                return Err(LangGraphError::GraphError(format!(
-                    "Dead-end: nodes {:?} have no outgoing edges",
-                    current
-                )));
+            let next = self.get_next_node_key(&current, state.as_ref());
+            match next {
+                Ok(next) => {
+                    if next.is_empty() {
+                        return Err(LangGraphError::GraphError(format!(
+                            "Dead-end: nodes {:?} have no outgoing edges",
+                            current
+                        )));
+                    }else{
+                        current=next;
+                    }
+                }
+                Err(e) => {
+                    return Err(e);
+                }
             }
-            current = next;
         }
         Ok(())
     }
