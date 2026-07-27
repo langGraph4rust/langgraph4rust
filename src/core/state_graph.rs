@@ -2,8 +2,8 @@ use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
 use std::collections::{HashMap, HashSet};
+use std::future::ready;
 use std::sync::Arc;
-use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinSet;
 
 pub const START_NODE: &str = "__start__";
@@ -171,7 +171,7 @@ impl<S: AgentState> StateGraph<S> {
         Ok(false)
     }
 
-    fn get_next_node_key(&self, keys: &HashSet<String>, state: &S) -> Result<HashSet<String>, LangGraphError> {
+    fn  get_next_node_key(&self, keys: &HashSet<String>, state: &S) -> Result<HashSet<String>, LangGraphError> {
         if keys.is_empty() {
             return Ok(HashSet::new());
         }
@@ -198,7 +198,7 @@ impl<S: AgentState> StateGraph<S> {
         }
         Ok(next_node_keys)
     }
-    pub fn invoke(&self, state: &mut S) -> Result<(), LangGraphError> {
+    pub async fn invoke(&self,state: Arc<S>) -> Result<(), LangGraphError> {
         let mut current = HashSet::new();
         current.insert(self.start_node.to_string());
 
@@ -223,7 +223,7 @@ impl<S: AgentState> StateGraph<S> {
                         format!("Dead-end: nodes {:?} have no find by keys", current),
                     ));
                 }
-                self.batch_apply(nodes, state)?;
+                self.batch_apply(nodes, Arc::clone(&state)).await?;
             }
             let next = self.get_next_node_key(&current, state)?;
             if next.is_empty() {
@@ -238,15 +238,15 @@ impl<S: AgentState> StateGraph<S> {
 
     async fn batch_apply(
         &self,
-        nodes: Vec<Box<dyn AgentNode<S>>>,
-        state: S,
+        nodes: Vec<&Box<dyn AgentNode<S>>>,
+        state: Arc<S>
     ) -> Result<(), LangGraphError>
     {
         let mut batch_tasks: JoinSet<Result<(), LangGraphError>> = JoinSet::new();
-        nodes.into_iter().for_each(|node| {
-            let ret = node.apply(state);
+        for node in nodes {
+            let ret = ready(node.apply(Arc::clone(&state)));
             batch_tasks.spawn(ret);
-        });
+        };
         Ok(())
     }
 }

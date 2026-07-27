@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 
 pub trait AgentNode<S: AgentState> {
-    fn apply(&self, state: S) -> Result<(), LangGraphError>;
+    fn apply(&self, state: Arc<S>) -> Result<(), LangGraphError>;
     
-    fn fallback(&self, state: S, error: &(dyn Error)) -> Result<(), LangGraphError>;
+    fn fallback(&self, state: Arc<S>, error: &(dyn Error)) -> Result<(), LangGraphError>;
 }
