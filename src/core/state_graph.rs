@@ -13,7 +13,7 @@ pub const END_NODE: &str = "__end__";
 pub struct StateGraphBuilder<S: AgentState> {
     nodes: HashMap<String, Box<dyn AgentNode<S>>>,
     edges: HashMap<String, HashSet<String>>,
-    conditional_edges: HashMap<String, HashSet<Box<dyn Fn(&S) -> String>>>,
+    conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
     start_node: String,
     end_node: String,
     max_steps: usize,
@@ -23,7 +23,7 @@ pub struct StateGraphBuilder<S: AgentState> {
 pub struct StateGraph<S: AgentState> {
     nodes: HashMap<String, Box<dyn AgentNode<S>>>,
     edges: HashMap<String, HashSet<String>>,
-    conditional_edges: HashMap<String, HashSet<Box<dyn Fn(&S) -> String>>>,
+    conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
     start_node: String,
     end_node: String,
     max_steps: usize,
@@ -55,10 +55,10 @@ impl<S: AgentState> StateGraphBuilder<S> {
         self
     }
 
-    pub fn add_conditional_edge<F>(
+    pub fn add_conditional_edge(
         &mut self,
         from: &str,
-        routers: HashSet<Box<dyn Fn(&S) -> String>>,
+        routers: Vec<Box<dyn Fn(&S) -> String>>,
     ) -> &mut Self {
         self.conditional_edges.insert(from.to_string(), routers);
         self
