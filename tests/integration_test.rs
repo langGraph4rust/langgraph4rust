@@ -1090,3 +1090,134 @@ async fn test_graph_memory_usage() -> Result<(), LangGraphError> {
 
     Ok(())
 }
+
+/// 测试场景：重复边覆盖问题
+/// 验证多次添加同一边时是否会被覆盖
+#[tokio::test]
+async fn test_edge_overwrite_behavior() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node1", Box::new(CounterNode));
+    builder.add_node("node2", Box::new(CounterNode));
+    builder.add_node("node3", Box::new(CounterNode));
+    
+    // 第一次添加边：node1 -> node2
+    builder.add_edge("__start__", HashSet::from(["node1".to_string()]));
+    builder.add_edge("node1", HashSet::from(["node2".to_string()]));
+    
+    // 第二次添加边：node1 -> node3（覆盖之前的边）
+    builder.add_edge("node1", HashSet::from(["node3".to_string()]));
+    
+    builder.add_edge("node2", HashSet::from(["__end__".to_string()]));
+    builder.add_edge("node3", HashSet::from(["__end__".to_string()]));
+    
+    let graph = builder.compile()?;
+
+    let state = Arc::new(DefaultMemoryState::new());
+    graph.invoke(state.clone()).await?;
+
+    let count: i32 = state.get("count").await?.unwrap();
+    // 由于边被覆盖，只有 node1 和 node3 执行
+    assert_eq!(count, 2, "Edge overwrite: only node1 and node3 should execute");
+
+    Ok(())
+}
+
+/// 测试场景：条件边返回空字符串
+/// 验证条件边返回空字符串时的行为
+#[tokio::test]
+async fn test_conditional_edge_empty_string() {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    
+    // 添加条件边，返回空字符串
+    builder.add_conditional_edge("__start__", vec![Box::new(|_state| "".to_string())]);
+    
+    let result = builder.compile();
+    
+    // 当前代码在编译时不会检查条件边的返回值
+    assert!(result.is_ok(), "Conditional edge with empty string compiles");
+}
+
+/// 测试场景：条件边返回不存在的节点
+/// 验证条件边返回不存在节点时的运行时行为
+#[tokio::test]
+async fn test_conditional_edge_invalid_target() {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    
+    // 添加条件边，返回不存在的节点
+    builder.add_conditional_edge("__start__", vec![Box::new(|_state| "nonexistent".to_string())]);
+    
+    let graph = builder.compile().unwrap();
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    let result = graph.invoke(state).await;
+    
+    // 运行时会报错因为找不到目标节点
+    assert!(result.is_err(), "Should fail at runtime due to invalid target");
+}
+
+/// 测试场景：节点名称为空字符串
+/// 验证空节点名称是否被允许
+#[tokio::test]
+async fn test_empty_node_name_validation() {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("", Box::new(CounterNode));
+    builder.add_edge("__start__", HashSet::from(["".to_string()]));
+    builder.add_edge("", HashSet::from(["__end__".to_string()]));
+    
+    let result = builder.compile();
+    
+    // 当前代码允许空节点名称
+    assert!(result.is_ok(), "Empty node name is allowed");
+}
+
+/// 测试场景：batch_apply 错误收集
+/// 验证并行执行时多个节点失败是否只返回第一个错误
+#[tokio::test]
+async fn test_batch_apply_single_error() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("good", Box::new(CounterNode));
+    builder.add_node("bad", Box::new(FailingNode));
+    builder.add_edge("__start__", HashSet::from(["good".to_string(), "bad".to_string()]));
+    builder.add_edge("good", HashSet::from(["__end__".to_string()]));
+    builder.add_edge("bad", HashSet::from(["__end__".to_string()]));
+    
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    let result = graph.invoke(state.clone()).await;
+    
+    // 当前代码只返回第一个错误
+    assert!(result.is_err(), "Should return error");
+    
+    // 检查好节点是否仍然执行了
+    let count: Option<i32> = state.get("count").await?;
+    assert!(count.is_some(), "Good node should have executed before error");
+    
+    Ok(())
+}
+
+/// 测试场景：最大步数为0
+/// 验证 max_steps=0 时的行为
+#[tokio::test]
+async fn test_max_steps_zero() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    builder.add_edge("__start__", HashSet::from(["node".to_string()]));
+    builder.add_edge("node", HashSet::from(["__end__".to_string()]));
+    builder.set_max_steps(0);
+    
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    let result = graph.invoke(state.clone()).await;
+    
+    // max_steps=0 时不执行任何节点
+    assert!(result.is_ok(), "Should complete without executing");
+    
+    let count: Option<i32> = state.get("count").await?;
+    assert!(count.is_none(), "No nodes should have executed");
+    
+    Ok(())
+}
