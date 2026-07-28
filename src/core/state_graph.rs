@@ -85,7 +85,7 @@ impl<S: AgentState> StateGraphBuilder<S> {
         }
         if self.nodes.contains_key(self.start_node.deref()) {
             return Err(LangGraphError::GraphError(format!(
-                "Start node '{}' is not a registered node",
+                "Start node '{}' cannot be a normal node",
                 self.start_node
             )));
         }
