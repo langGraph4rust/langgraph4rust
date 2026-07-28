@@ -228,7 +228,7 @@ impl<S: AgentState> StateGraph<S> {
         let max_steps = self.max_steps;
 
         loop {
-            if step_count > max_steps {
+            if step_count>= max_steps {
                 break;
             }
             step_count = step_count + 1;
