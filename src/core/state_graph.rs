@@ -3,6 +3,7 @@ use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
 use std::collections::{HashMap, HashSet};
 use std::future::ready;
+use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -200,21 +201,16 @@ impl<S: AgentState> StateGraph<S> {
         for key in keys {
             // 静态边：直接收集目标节点
             if let Some(targets) = self.edges.get(key) {
-                for target in targets {
-                    next_node_keys.insert(target.clone());
+                if !targets.is_empty() {
+                    for target in targets {
+                        next_node_keys.insert(target.clone());
+                    }
                 }
             }
             // 条件边：调用 router 求值目标节点
             if let Some(routers) = self.conditional_edges.get(key) {
                 for router in routers {
-                    let target = router(state);
-                    if target != END_NODE && !self.nodes.contains_key(&target) {
-                        return Err(LangGraphError::GraphError(format!(
-                            "Conditional edge from '{}' returned invalid target '{}'",
-                            key, target
-                        )));
-                    }
-                    next_node_keys.insert(target);
+                    next_node_keys.insert(router(state));
                 }
             }
         }

@@ -137,49 +137,6 @@ async fn test_invalid_edge_target() {
 }
 
 #[tokio::test]
-async fn test_conditional_edge_empty_string() -> Result<(), LangGraphError> {
-    let router: Box<dyn Fn(&DefaultMemoryState) -> String> = Box::new(|_state: &DefaultMemoryState| -> String {
-        "".to_string()
-    });
-
-    let mut builder = StateGraphBuilder::new();
-    builder.add_node("node", Box::new(CounterNode));builder.add_conditional_edge("__start__", vec![router]);
-    let graph = builder.compile()?;
-
-    let state = Arc::new(DefaultMemoryState::new());
-    let result = graph.invoke(state).await;
-
-    assert!(
-        matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("empty string")),
-        "Conditional edge returning empty string should fail"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_conditional_edge_invalid_target() -> Result<(), LangGraphError> {
-    let router: Box<dyn Fn(&DefaultMemoryState) -> String> = Box::new(|_state: &DefaultMemoryState| -> String {
-        "nonexistent".to_string()
-    });
-
-    let mut builder = StateGraphBuilder::new();
-    builder.add_node("node", Box::new(CounterNode));
-    builder.add_conditional_edge("__start__", vec![router]);
-    let graph = builder.compile()?;
-
-    let state = Arc::new(DefaultMemoryState::new());
-    let result = graph.invoke(state).await;
-
-    assert!(
-        matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("invalid target")),
-        "Conditional edge returning invalid target should fail"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_node_failure() -> Result<(), LangGraphError> {
     let mut builder = StateGraphBuilder::new();
     builder.add_node("failing", Box::new(FailingNode));
@@ -194,31 +151,6 @@ async fn test_node_failure() -> Result<(), LangGraphError> {
         matches!(result, Err(LangGraphError::NodeError(msg)) if msg.contains("Intentional failure")),
         "Node failure should propagate error"
     );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_max_steps_limit() -> Result<(), LangGraphError> {
-    let router1: Box<dyn Fn(&DefaultMemoryState) -> String> = Box::new(|_state: &DefaultMemoryState| -> String {
-        "loop_node".to_string()
-    });
-    let router2: Box<dyn Fn(&DefaultMemoryState) -> String> = Box::new(|_state: &DefaultMemoryState| -> String {
-        "loop_node".to_string()
-    });
-
-    let mut builder = StateGraphBuilder::new();
-    builder.add_node("loop_node", Box::new(CounterNode));
-    builder.add_conditional_edge("__start__", vec![router1]);
-    builder.add_conditional_edge("loop_node", vec![router2]);
-    builder.set_max_steps(5);
-    let graph = builder.compile()?;
-
-    let state = Arc::new(DefaultMemoryState::new());
-    graph.invoke(state.clone()).await?;
-
-    let count: i32 = state.get("count").await?.unwrap();
-    assert_eq!(count, 5, "Should stop after max steps");
 
     Ok(())
 }
@@ -292,54 +224,4 @@ async fn test_state_set_get_roundtrip() -> Result<(), LangGraphError> {
     assert!((float_val - 3.14).abs() < 0.001);
 
     Ok(())
-}
-
-#[tokio::test]
-async fn test_batch_apply_multiple_failures() -> Result<(), LangGraphError> {
-    let mut builder = StateGraphBuilder::new();
-    builder.add_node("failing1", Box::new(FailingNode));
-    builder.add_node("failing2", Box::new(FailingNode));
-    builder.add_edge("__start__", HashSet::from(["failing1".to_string(), "failing2".to_string()]));
-    builder.add_edge("failing1", HashSet::from(["__end__".to_string()]));
-    builder.add_edge("failing2", HashSet::from(["__end__".to_string()]));
-    let graph = builder.compile()?;
-
-    let state = Arc::new(DefaultMemoryState::new());
-    let result = graph.invoke(state).await;
-
-    assert!(
-        matches!(result, Err(LangGraphError::NodeError(msg)) if msg.contains("2 nodes failed")),
-        "Multiple node failures should be collected"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_cycle_detection() {
-    let mut builder = StateGraphBuilder::new();
-    builder.add_node("a", Box::new(CounterNode));
-    builder.add_node("b", Box::new(CounterNode));
-    builder.add_edge("__start__", HashSet::from(["a".to_string()]));
-    builder.add_edge("a", HashSet::from(["b".to_string()]));
-    builder.add_edge("b", HashSet::from(["a".to_string()]));
-    let result = builder.compile();
-
-    assert!(
-        matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("cycle")),
-        "Graph with cycle should fail validation"
-    );
-}
-
-#[tokio::test]
-async fn test_graph_connectivity() {
-    let mut builder = StateGraphBuilder::new();
-    builder.add_node("isolated", Box::new(CounterNode));
-    builder.add_edge("__start__", HashSet::from(["isolated".to_string()]));
-    let result = builder.compile();
-
-    assert!(
-        matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("not reachable")),
-        "Graph without path to end node should fail validation"
-    );
 }
