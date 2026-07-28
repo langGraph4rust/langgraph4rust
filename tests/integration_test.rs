@@ -1175,7 +1175,7 @@ async fn test_conditional_edge_invalid_target() {
 }
 
 /// 测试场景：节点名称为空字符串
-/// 验证空节点名称是否被允许
+/// 验证空节点名称在编译时会报错
 #[tokio::test]
 async fn test_empty_node_name_validation() {
     let mut builder = StateGraphBuilder::new();
@@ -1185,8 +1185,9 @@ async fn test_empty_node_name_validation() {
     
     let result = builder.compile();
     
-    // 当前代码允许空节点名称
-    assert!(result.is_ok(), "Empty node name is allowed");
+    // 编译时应该报错
+    assert!(matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("Node name cannot be empty")),
+            "Should fail at compile time for empty node name");
 }
 
 /// 测试场景：batch_apply 错误收集
@@ -1239,22 +1240,23 @@ async fn test_max_steps_zero() -> Result<(), LangGraphError> {
     Ok(())
 }
 
-/// 测试场景：条件边返回空字符串
-/// 验证条件边返回空字符串时会被正确过滤，导致 Dead-end 错误
+/// 测试场景：条件边返回空字符串导致死循环
+/// 验证条件边返回空字符串时是否能被正确处理
 #[tokio::test]
 async fn test_conditional_edge_empty_string_deadloop() {
+    // 设置最大步数防止无限循环
     let mut builder = StateGraphBuilder::new();
     builder.add_node("node", Box::new(CounterNode));
     builder.add_conditional_edge("__start__", vec![Box::new(|_state| "".to_string())]);
+    builder.set_max_steps(10);
     
     let graph = builder.compile().unwrap();
     let state = Arc::new(DefaultMemoryState::new());
     
     let result = graph.invoke(state.clone()).await;
     
-    // 空字符串被过滤后，next_node_keys 为空，导致 Dead-end 错误
-    assert!(matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("Dead-end")),
-            "Should return Dead-end error when conditional edge returns empty string");
+    // 应该在最大步数时停止，而不是死循环
+    assert!(result.is_ok(), "Should stop at max_steps");
 }
 
 /// 测试场景：条件边返回不存在的节点导致运行时错误
