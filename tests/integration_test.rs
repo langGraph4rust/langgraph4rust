@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::collections::HashSet;
 use futures::executor::block_on;
 
+/// 计数器节点：每次执行将状态中的 count 值加 1
 #[derive(Debug, Clone)]
 struct CounterNode;
 
@@ -20,6 +21,7 @@ impl AgentNode<DefaultMemoryState> for CounterNode {
     }
 }
 
+/// 消息节点：将指定消息写入状态
 #[derive(Debug, Clone)]
 struct MessageNode {
     message: String,
@@ -34,6 +36,7 @@ impl AgentNode<DefaultMemoryState> for MessageNode {
     }
 }
 
+/// 失败节点：故意返回错误，用于测试错误处理
 #[derive(Debug, Clone)]
 struct FailingNode;
 
@@ -43,6 +46,8 @@ impl AgentNode<DefaultMemoryState> for FailingNode {
     }
 }
 
+/// 测试场景：简单线性工作流
+/// 验证单个节点的基本执行流程：start -> counter -> end
 #[tokio::test]
 async fn test_simple_linear_workflow() -> Result<(), LangGraphError> {
     let mut builder = StateGraphBuilder::new();
@@ -60,6 +65,8 @@ async fn test_simple_linear_workflow() -> Result<(), LangGraphError> {
     Ok(())
 }
 
+/// 测试场景：多步骤顺序工作流
+/// 验证多个节点按顺序执行：start -> counter1 -> counter2 -> end
 #[tokio::test]
 async fn test_multi_step_workflow() -> Result<(), LangGraphError> {
     let mut builder = StateGraphBuilder::new();
@@ -79,6 +86,8 @@ async fn test_multi_step_workflow() -> Result<(), LangGraphError> {
     Ok(())
 }
 
+/// 测试场景：并行节点执行
+/// 验证多个节点可以同时执行：start -> node1 + node2 -> end
 #[tokio::test]
 async fn test_parallel_execution() -> Result<(), LangGraphError> {
     let mut builder = StateGraphBuilder::new();
@@ -101,6 +110,8 @@ async fn test_parallel_execution() -> Result<(), LangGraphError> {
     Ok(())
 }
 
+/// 测试场景：空图验证
+/// 验证编译空图（无节点）时应返回错误
 #[tokio::test]
 async fn test_empty_graph_validation() {
     let result = StateGraphBuilder::<DefaultMemoryState>::new().compile();
@@ -111,6 +122,8 @@ async fn test_empty_graph_validation() {
     );
 }
 
+/// 测试场景：起始节点无出边验证
+/// 验证当起始节点没有出边时应返回错误
 #[tokio::test]
 async fn test_start_node_without_edges() {
     let mut builder = StateGraphBuilder::new();
@@ -123,6 +136,8 @@ async fn test_start_node_without_edges() {
     );
 }
 
+/// 测试场景：无效边目标验证
+/// 验证边指向未注册的节点时应返回错误
 #[tokio::test]
 async fn test_invalid_edge_target() {
     let mut builder = StateGraphBuilder::new();
@@ -136,6 +151,8 @@ async fn test_invalid_edge_target() {
     );
 }
 
+/// 测试场景：节点执行失败
+/// 验证节点执行失败时错误能够正确传播
 #[tokio::test]
 async fn test_node_failure() -> Result<(), LangGraphError> {
     let mut builder = StateGraphBuilder::new();
@@ -155,6 +172,8 @@ async fn test_node_failure() -> Result<(), LangGraphError> {
     Ok(())
 }
 
+/// 测试场景：状态持久化
+/// 验证多次调用图时状态能够正确累积
 #[tokio::test]
 async fn test_state_persistence() -> Result<(), LangGraphError> {
     let mut builder = StateGraphBuilder::new();
@@ -176,6 +195,8 @@ async fn test_state_persistence() -> Result<(), LangGraphError> {
     Ok(())
 }
 
+/// 测试场景：自定义起始和结束节点
+/// 验证可以使用自定义的起始和结束节点名称
 #[tokio::test]
 async fn test_custom_start_end_nodes() -> Result<(), LangGraphError> {
     let mut builder = StateGraphBuilder::new();
@@ -197,6 +218,8 @@ async fn test_custom_start_end_nodes() -> Result<(), LangGraphError> {
     Ok(())
 }
 
+/// 测试场景：获取不存在的键
+/// 验证从状态中获取不存在的键时返回 None
 #[tokio::test]
 async fn test_state_get_nonexistent_key() -> Result<(), LangGraphError> {
     let state = Arc::new(DefaultMemoryState::new());
@@ -207,6 +230,8 @@ async fn test_state_get_nonexistent_key() -> Result<(), LangGraphError> {
     Ok(())
 }
 
+/// 测试场景：状态读写往返
+/// 验证不同类型的数据能够正确写入和读取
 #[tokio::test]
 async fn test_state_set_get_roundtrip() -> Result<(), LangGraphError> {
     let state = Arc::new(DefaultMemoryState::new());
