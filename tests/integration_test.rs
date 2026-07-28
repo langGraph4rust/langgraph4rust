@@ -250,3 +250,132 @@ async fn test_state_set_get_roundtrip() -> Result<(), LangGraphError> {
 
     Ok(())
 }
+
+/// 测试场景：最大步数限制
+/// 验证当执行步数超过最大限制时能够停止执行
+#[tokio::test]
+async fn test_max_steps_limit() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("counter", Box::new(CounterNode));
+    builder.add_edge("__start__", HashSet::from(["counter".to_string()]));
+    builder.add_edge("counter", HashSet::from(["counter".to_string()]));
+    builder.set_max_steps(5);
+    let graph = builder.compile()?;
+
+    let state = Arc::new(DefaultMemoryState::new());
+    graph.invoke(state.clone()).await?;
+
+    let count: i32 = state.get("count").await?.unwrap();
+    assert_eq!(count, 5, "Should stop after max steps");
+
+    Ok(())
+}
+
+/// 测试场景：无效边源验证
+/// 验证边的源节点未注册时应返回错误
+#[tokio::test]
+async fn test_invalid_edge_source() {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    builder.add_edge("__start__", HashSet::from(["node".to_string()]));
+    builder.add_edge("nonexistent", HashSet::from(["__end__".to_string()]));
+    let result = builder.compile();
+
+    assert!(
+        matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("is not a registered node")),
+        "Invalid edge source should fail validation"
+    );
+}
+
+/// 测试场景：并行执行多个失败节点
+/// 验证并行执行时多个节点失败的情况
+#[tokio::test]
+async fn test_parallel_multiple_failures() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("failing1", Box::new(FailingNode));
+    builder.add_node("failing2", Box::new(FailingNode));
+    builder.add_edge("__start__", HashSet::from(["failing1".to_string(), "failing2".to_string()]));
+    builder.add_edge("failing1", HashSet::from(["__end__".to_string()]));
+    builder.add_edge("failing2", HashSet::from(["__end__".to_string()]));
+    let graph = builder.compile()?;
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let result = graph.invoke(state).await;
+
+    assert!(
+        result.is_err(),
+        "Parallel execution with multiple failures should return error"
+    );
+
+    Ok(())
+}
+
+/// 测试场景：重复添加同名节点
+/// 验证添加同名节点时后添加的会覆盖先添加的
+#[tokio::test]
+async fn test_duplicate_node_name() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    builder.add_node("node", Box::new(MessageNode { message: "test".to_string() }));
+    builder.add_edge("__start__", HashSet::from(["node".to_string()]));
+    builder.add_edge("node", HashSet::from(["__end__".to_string()]));
+    let graph = builder.compile()?;
+
+    let state = Arc::new(DefaultMemoryState::new());
+    graph.invoke(state.clone()).await?;
+
+    let message: Option<String> = state.get("message").await?;
+    assert!(message.is_some(), "Message should be set by second node");
+    assert_eq!(message.unwrap(), "test");
+
+    Ok(())
+}
+
+/// 测试场景：空状态初始化
+/// 验证状态初始化为空时能正常工作
+#[tokio::test]
+async fn test_empty_state_initialization() -> Result<(), LangGraphError> {
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    let result: Option<i32> = state.get("any_key").await?;
+    assert!(result.is_none(), "Empty state should return None for any key");
+
+    Ok(())
+}
+
+/// 测试场景：状态值覆盖
+/// 验证相同键的值可以被覆盖
+#[tokio::test]
+async fn test_state_value_overwrite() -> Result<(), LangGraphError> {
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    state.set("key", "first").await?;
+    state.set("key", "second").await?;
+
+    let value: String = state.get("key").await?.unwrap();
+    assert_eq!(value, "second", "Value should be overwritten");
+
+    Ok(())
+}
+
+/// 测试场景：复杂状态数据
+/// 验证复杂数据结构（如 Vec、HashMap）能够正确存储和读取
+#[tokio::test]
+async fn test_complex_state_data() -> Result<(), LangGraphError> {
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    let vec_data = vec![1, 2, 3, 4, 5];
+    let map_data: std::collections::HashMap<String, i32> = [("a".to_string(), 1), ("b".to_string(), 2)].into();
+    
+    state.set("vec", vec_data).await?;
+    state.set("map", map_data).await?;
+
+    let retrieved_vec: Vec<i32> = state.get("vec").await?.unwrap();
+    let retrieved_map: std::collections::HashMap<String, i32> = state.get("map").await?.unwrap();
+    
+    assert_eq!(retrieved_vec, vec![1, 2, 3, 4, 5]);
+    assert_eq!(retrieved_map.get("a"), Some(&1));
+    assert_eq!(retrieved_map.get("b"), Some(&2));
+
+    Ok(())
+}
