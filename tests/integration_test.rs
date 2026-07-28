@@ -3,16 +3,17 @@ use langgraph4rust::{
 };
 use std::sync::Arc;
 use std::collections::HashSet;
+use futures::executor::block_on;
 
 #[derive(Debug, Clone)]
 struct CounterNode;
 
 impl AgentNode<DefaultMemoryState> for CounterNode {
     fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
-        let count: i32 = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let count: i32 = block_on(async {
             state.get("count").await.unwrap_or(None)
         }).unwrap_or(0);
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
+        block_on(async {
             state.set("count", count + 1).await
         })?;
         Ok(())
@@ -26,7 +27,7 @@ struct MessageNode {
 
 impl AgentNode<DefaultMemoryState> for MessageNode {
     fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
+        block_on(async {
             state.set("message", self.message.clone()).await
         })?;
         Ok(())
