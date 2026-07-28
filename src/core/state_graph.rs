@@ -83,6 +83,12 @@ impl<S: AgentState> StateGraphBuilder<S> {
                 "Graph must contain at least one node".to_string(),
             ));
         }
+        if self.nodes.contains_key(self.start_node.deref()) {
+            return Err(LangGraphError::GraphError(format!(
+                "Start node '{}' is not a registered node",
+                self.start_node
+            )));
+        }
 
         // 2. start_node 必须有出边（静态边或条件边）
         let start_has_edge = self.edges.contains_key(&self.start_node)
