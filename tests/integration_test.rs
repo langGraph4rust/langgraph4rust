@@ -202,9 +202,8 @@ async fn test_custom_start_end_nodes() -> Result<(), LangGraphError> {
     let mut builder = StateGraphBuilder::new();
     builder.set_start_node("begin");
     builder.set_end_node("finish");
-    builder.add_node("begin", Box::new(CounterNode));
+    // 注意：start_node 和 end_node 是虚拟节点，不注册为普通节点
     builder.add_node("middle", Box::new(CounterNode));
-    builder.add_node("finish", Box::new(CounterNode));
     builder.add_edge("begin", HashSet::from(["middle".to_string()]));
     builder.add_edge("middle", HashSet::from(["finish".to_string()]));
     let graph = builder.compile()?;
@@ -213,7 +212,7 @@ async fn test_custom_start_end_nodes() -> Result<(), LangGraphError> {
     graph.invoke(state.clone()).await?;
 
     let count: i32 = state.get("count").await?.unwrap();
-    assert_eq!(count, 3, "All three nodes should execute");
+    assert_eq!(count, 1, "Only middle node should execute (start/end are virtual)");
 
     Ok(())
 }
