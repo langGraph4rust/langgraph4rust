@@ -46,6 +46,23 @@ impl AgentNode<DefaultMemoryState> for FailingNode {
     }
 }
 
+/// 慢速节点：执行时等待一段时间，用于测试并行执行
+#[derive(Debug, Clone)]
+struct SlowNode;
+
+impl AgentNode<DefaultMemoryState> for SlowNode {
+    fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let count: i32 = block_on(async {
+            state.get("slow_count").await.unwrap_or(None)
+        }).unwrap_or(0);
+        block_on(async {
+            state.set("slow_count", count + 1).await
+        })?;
+        Ok(())
+    }
+}
+
 /// 测试场景：简单线性工作流
 /// 验证单个节点的基本执行流程：start -> counter -> end
 #[tokio::test]
@@ -1218,6 +1235,91 @@ async fn test_max_steps_zero() -> Result<(), LangGraphError> {
     
     let count: Option<i32> = state.get("count").await?;
     assert!(count.is_none(), "No nodes should have executed");
+    
+    Ok(())
+}
+
+/// 测试场景：条件边返回空字符串导致死循环
+/// 验证条件边返回空字符串时是否能被正确处理
+#[tokio::test]
+async fn test_conditional_edge_empty_string_deadloop() {
+    // 设置最大步数防止无限循环
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    builder.add_conditional_edge("__start__", vec![Box::new(|_state| "".to_string())]);
+    builder.set_max_steps(10);
+    
+    let graph = builder.compile().unwrap();
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    let result = graph.invoke(state.clone()).await;
+    
+    // 应该在最大步数时停止，而不是死循环
+    assert!(result.is_ok(), "Should stop at max_steps");
+}
+
+/// 测试场景：条件边返回不存在的节点导致运行时错误
+/// 验证条件边返回不存在节点时的行为
+#[tokio::test]
+async fn test_conditional_edge_runtime_error() {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    
+    // 条件边返回不存在的节点
+    builder.add_conditional_edge("__start__", vec![Box::new(|_state| "nonexistent".to_string())]);
+    
+    let graph = builder.compile().unwrap();
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    let result = graph.invoke(state).await;
+    
+    // 运行时应该报错
+    assert!(matches!(result, Err(LangGraphError::NotFound(_))), 
+            "Should return NotFound error for invalid target");
+}
+
+/// 测试场景：空条件边集合
+/// 验证条件边集合为空时的行为
+#[tokio::test]
+async fn test_empty_conditional_edges() {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    
+    // 添加空的条件边集合
+    builder.add_conditional_edge("__start__", vec![]);
+    
+    let result = builder.compile();
+    
+    // 编译应该成功，但执行时会报错
+    assert!(result.is_ok(), "Empty conditional edges should compile");
+    
+    let graph = result.unwrap();
+    let state = Arc::new(DefaultMemoryState::new());
+    let exec_result = graph.invoke(state).await;
+    
+    // 执行时应该报 Dead-end 错误
+    assert!(matches!(exec_result, Err(LangGraphError::GraphError(msg)) if msg.contains("Dead-end")),
+            "Should return Dead-end error");
+}
+
+/// 测试场景：并行执行时好节点先完成但错误被丢弃
+/// 验证并行执行时即使部分节点成功，错误也会被返回
+#[tokio::test]
+async fn test_parallel_execution_error_handling() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("slow", Box::new(SlowNode));
+    builder.add_node("fast_fail", Box::new(FailingNode));
+    builder.add_edge("__start__", HashSet::from(["slow".to_string(), "fast_fail".to_string()]));
+    builder.add_edge("slow", HashSet::from(["__end__".to_string()]));
+    builder.add_edge("fast_fail", HashSet::from(["__end__".to_string()]));
+    
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    let result = graph.invoke(state.clone()).await;
+    
+    // 应该返回错误，即使慢节点还在执行
+    assert!(result.is_err(), "Should return error from failing node");
     
     Ok(())
 }
