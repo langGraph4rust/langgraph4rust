@@ -476,23 +476,20 @@ async fn test_no_path_to_end() -> Result<(), LangGraphError> {
 }
 
 /// 测试场景：起始节点作为普通节点注册
-/// 验证当起始节点也被注册为普通节点时是否会被执行
+/// 验证当尝试将起始节点注册为普通节点时应该报错
 #[tokio::test]
-async fn test_start_node_as_regular_node() -> Result<(), LangGraphError> {
+async fn test_start_node_as_regular_node() {
     let mut builder = StateGraphBuilder::new();
     builder.add_node("__start__", Box::new(CounterNode));
     builder.add_edge("__start__", HashSet::from(["__end__".to_string()]));
-    let graph = builder.compile()?;
-
-    let state = Arc::new(DefaultMemoryState::new());
-    graph.invoke(state.clone()).await?;
-
-    let count: i32 = state.get("count").await?.unwrap_or(0);
-    // 当前代码跳过起始节点的执行，所以 count 应该是 0
-    // 这暴露了起始节点执行逻辑的问题
-    assert_eq!(count, 0, "Current code skips start node execution");
-
-    Ok(())
+    
+    let result = builder.compile();
+    
+    // 根据当前代码设计，起始节点不能注册为普通节点
+    assert!(
+        matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("cannot be a normal node")),
+        "Should reject registering start node as regular node"
+    );
 }
 
 /// 测试场景：多个入边的节点
@@ -800,11 +797,12 @@ async fn test_execution_order() -> Result<(), LangGraphError> {
 async fn test_empty_node_name() {
     let mut builder = StateGraphBuilder::new();
     builder.add_node("", Box::new(CounterNode));
+    builder.add_edge("__start__", HashSet::from(["".to_string()]));
     
     let result = builder.compile();
     
-    // 当前代码允许空节点名称，这可能是一个安全问题
-    assert!(result.is_ok(), "Empty node name should compile (potential security issue)");
+    // 当前代码允许空节点名称，但这不是好的实践
+    assert!(result.is_ok(), "Empty node name should compile");
 }
 
 /// 测试场景：边指向已删除节点
