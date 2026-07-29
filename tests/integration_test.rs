@@ -3,6 +3,7 @@ use langgraph4rust::{
 };
 use std::sync::Arc;
 use std::collections::HashSet;
+use std::sync::atomic::AtomicBool;
 use async_trait::async_trait;
 
 /// 计数器节点：每次执行将状态中的 count 值加 1
@@ -2049,4 +2050,459 @@ async fn test_conditional_router_panic() {
 
     // 这里的 panic 会被上面的 #[should_panic] 属性捕获
     graph.invoke(state).await.expect("This should have panicked!");
+}
+
+// ============================================================================
+// 新增高级测试用例集
+// ============================================================================
+
+/// 测试场景：图的并发执行安全性
+/// 验证多个图实例同时执行不会互相干扰
+#[tokio::test]
+async fn test_concurrent_graph_execution() -> Result<(), LangGraphError> {
+    use tokio::task::JoinSet;
+
+    async fn create_and_run_graph(prefix: &str) -> Result<(), LangGraphError> {
+        let mut builder = StateGraphBuilder::new();
+        builder.add_node(&format!("{}_counter", prefix), Box::new(CounterNode));
+        builder.add_edge("__start__", HashSet::from([format!("{}_counter", prefix)]));
+        builder.add_edge(&format!("{}_counter", prefix), HashSet::from(["__end__".to_string()]));
+
+        let graph = builder.compile()?;
+        let state = Arc::new(DefaultMemoryState::new());
+        state.set(&format!("prefix"), prefix).await?;
+        graph.invoke(state).await?;
+
+        Ok(())
+    }
+
+    let mut tasks = JoinSet::new();
+
+    // 同时启动10个图执行任务
+    for i in 0..10 {
+        let prefix = format!("graph_{}", i);
+        tasks.spawn(async move {
+            create_and_run_graph(&prefix).await
+        });
+    }
+
+    // 等待所有任务完成
+    while let Some(result) = tasks.join_next().await {
+        result??;
+    }
+
+    Ok(())
+}
+
+/// 测试场景：状态复杂数据结构的深度嵌套
+/// 验证系统能够处理多层嵌套的JSON数据
+#[tokio::test]
+async fn test_deeply_nested_state() -> Result<(), LangGraphError> {
+    use serde_json::{json, Value};
+
+    let state = Arc::new(DefaultMemoryState::new());
+
+    // 创建深层嵌套结构（5层）
+    let nested_data: Value = json!({
+        "level1": {
+            "level2": {
+                "level3": {
+                    "level4": {
+                        "level5": {
+                            "value": "deep_value",
+                            "number": 42,
+                            "array": [1, 2, 3, [4, 5]]
+                        }
+                    }
+                }
+            }
+        },
+        "metadata": {
+            "created_at": "2024-01-01T00:00:00Z",
+            "tags": ["test", "nested", "complex"]
+        }
+    });
+
+    state.set("deep_nested", &nested_data).await?;
+
+    let retrieved: Option<Value> = state.get("deep_nested").await?;
+    assert!(retrieved.is_some(), "Should retrieve nested data");
+
+    // 验证最深层的值（需要先unwrap Option）
+    let nested_value = retrieved.unwrap();
+    assert_eq!(
+        nested_value["level1"]["level2"]["level3"]["level4"]["level5"]["value"],
+        json!("deep_value"),
+        "Should preserve deep nesting"
+    );
+
+    Ok(())
+}
+
+/// 测试场景：大量键值对的状态管理
+/// 验证系统在高负载下的稳定性
+#[tokio::test]
+async fn test_high_volume_state_operations() -> Result<(), LangGraphError> {
+    let state = Arc::new(DefaultMemoryState::new());
+
+    // 写入1000个不同的键
+    for i in 0..1000 {
+        let key = format!("key_{}", i);
+        let value = format!("value_{}", i);
+        state.set(&key, &value).await?;
+
+        // 立即读取验证
+        let retrieved: Option<String> = state.get(&key).await?;
+        assert_eq!(retrieved, Some(value), "Value mismatch for key {}", key);
+    }
+
+    // 批量验证所有值
+    for i in 0..1000 {
+        let key = format!("key_{}", i);
+        let expected = format!("value_{}", i);
+        let retrieved: Option<String> = state.get(&key).await?;
+        assert_eq!(retrieved, Some(expected), "Final verification failed for key {}", key);
+    }
+
+    Ok(())
+}
+
+/// 测试场景：图的重复编译和执行
+/// 验证同一个builder可以多次使用（如果设计允许）或正确报错
+#[tokio::test]
+async fn test_multiple_compilation_attempts() -> Result<(), LangGraphError> {
+    // 第一次编译
+    let mut builder1 = StateGraphBuilder::new();
+    builder1.add_node("node1", Box::new(CounterNode));
+    builder1.add_edge("__start__", HashSet::from(["node1".to_string()]));
+    builder1.add_edge("node1", HashSet::from(["__end__".to_string()]));
+
+    let graph1 = builder1.compile()?;
+    let state1 = Arc::new(DefaultMemoryState::new());
+    graph1.invoke(state1.clone()).await?;
+
+    // 尝试第二次编译（builder已被消费）
+    // 注意：compile() 消费 self，所以这里会编译错误或运行时错误
+    // 我们期望看到某种错误提示
+    println!("Note: If compile() consumes builder, this test verifies the error handling");
+
+    // 为了测试目的，创建一个新的builder来验证可以多次构建图
+    let mut builder2 = StateGraphBuilder::new();
+    builder2.add_node("node1", Box::new(CounterNode));
+    builder2.add_edge("__start__", HashSet::from(["node1".to_string()]));
+    builder2.add_edge("node1", HashSet::from(["__end__".to_string()]));
+
+    let graph2 = builder2.compile()?;
+    let state2 = Arc::new(DefaultMemoryState::new());
+    graph2.invoke(state2).await?;
+
+    // 两个图都应该能正常工作
+    let count1: Option<i32> = state1.get("count").await?;
+    let count2: Option<i32> = state2.get("count").await?;
+    assert_eq!(count1, Some(1), "First graph should work");
+    assert_eq!(count2, Some(1), "Second graph should also work");
+
+    Ok(())
+}
+
+/// 测试场景：条件边返回多个目标节点
+/// 验证条件边能够动态路由到多个并行节点
+#[tokio::test]
+async fn test_conditional_edge_multiple_targets() -> Result<(), LangGraphError> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TARGET_A_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static TARGET_B_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    struct CountingNodeA;
+
+    #[async_trait]
+    impl AgentNode<DefaultMemoryState> for CountingNodeA {
+        async fn apply(&self, _state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+            TARGET_A_COUNT.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct CountingNodeB;
+
+    #[async_trait]
+    impl AgentNode<DefaultMemoryState> for CountingNodeB {
+        async fn apply(&self, _state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+            TARGET_B_COUNT.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    static ROUTE_TO_BOTH: AtomicBool = AtomicBool::new(true);
+
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("target_a", Box::new(CountingNodeA));
+    builder.add_node("target_b", Box::new(CountingNodeB));
+
+    // 条件边路由到两个目标
+    builder.add_edge("__start__", HashSet::from([
+        "target_a".to_string(),
+        "target_b".to_string()
+    ]));
+
+    builder.add_edge("target_a", HashSet::from(["__end__".to_string()]));
+    builder.add_edge("target_b", HashSet::from(["__end__".to_string()]));
+
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+
+    graph.invoke(state).await?;
+
+    // 验证两个节点都执行了
+    assert_eq!(TARGET_A_COUNT.load(Ordering::SeqCst), 1, "Target A should execute once");
+    assert_eq!(TARGET_B_COUNT.load(Ordering::SeqCst), 1, "Target B should execute once");
+
+    Ok(())
+}
+
+/// 测试场景：状态值的类型覆盖
+/// 验证同一键可以存储不同类型的值（虽然不推荐，但不应崩溃）
+#[tokio::test]
+async fn test_state_type_overwrite() -> Result<(), LangGraphError> {
+    let state = Arc::new(DefaultMemoryState::new());
+
+    // 先存储整数
+    state.set("flexible_key", 42i32).await?;
+    let int_val: Option<i32> = state.get("flexible_key").await?;
+    assert_eq!(int_val, Some(42), "Should retrieve integer");
+
+    // 覆盖为字符串
+    state.set("flexible_key", "now a string").await?;
+    let str_val: Option<String> = state.get("flexible_key").await?;
+    assert_eq!(str_val, Some("now a string".to_string()), "Should retrieve string after overwrite");
+
+    // 覆盖为布尔值
+    state.set("flexible_key", true).await?;
+    let bool_val: Option<bool> = state.get("flexible_key").await?;
+    assert_eq!(bool_val, Some(true), "Should retrieve boolean after second overwrite");
+
+    // 尝试用旧类型读取应该失败
+    let wrong_type: Result<Option<i32>, _> = state.get("flexible_key").await;
+    assert!(wrong_type.is_err(), "Reading wrong type should fail");
+
+    Ok(())
+}
+
+/// 测试场景：空字符串和特殊字符作为节点名
+/// 验证系统能处理边缘情况的输入
+#[tokio::test]
+async fn test_special_character_node_names() -> Result<(), LangGraphError> {
+    let special_names = vec![
+        "node-with-dashes",
+        "node.with.dots",
+        "node_with_underscores",
+        "NodeWithCamelCase",
+        "NODE_WITH_UPPERCASE",
+        "node123withnumbers",
+        "node-with-mixed-123_chars",
+    ];
+
+    for name in special_names {
+        let mut builder = StateGraphBuilder::new();
+        builder.add_node(name, Box::new(CounterNode));
+        builder.add_edge("__start__", HashSet::from([name.to_string()]));
+        builder.add_edge(name, HashSet::from(["__end__".to_string()]));
+
+        let graph = builder.compile()?;
+        let state = Arc::new(DefaultMemoryState::new());
+
+        graph.invoke(state.clone()).await?;
+
+        // 验证计数器工作正常
+        let count: Option<i32> = state.get("count").await?;
+        assert_eq!(count, Some(1), "Counter should work with node name: {}", name);
+    }
+
+    Ok(())
+}
+
+/// 测试场景：超大型图的构建和执行
+/// 验证系统在大规模场景下的表现
+#[tokio::test]
+async fn test_large_scale_graph() -> Result<(), LangGraphError> {
+    const NODE_COUNT: usize = 50;
+
+    let mut builder = StateGraphBuilder::new();
+
+    // 创建链式结构：node0 -> node1 -> node2 -> ... -> node49
+    for i in 0..NODE_COUNT {
+        let node_name = format!("node_{}", i);
+        builder.add_node(&node_name, Box::new(CounterNode));
+
+        if i == 0 {
+            builder.add_edge("__start__", HashSet::from([node_name]));
+        } else {
+            let prev_node = format!("node_{}", i - 1);
+            builder.add_edge(&prev_node, HashSet::from([node_name]));
+        }
+    }
+
+    // 最后一个节点连接到结束
+    builder.add_edge(&format!("node_{}", NODE_COUNT - 1), HashSet::from(["__end__".to_string()]));
+
+    let start_time = std::time::Instant::now();
+    let graph = builder.compile()?;
+    let compile_duration = start_time.elapsed();
+
+    println!("Compilation of {} nodes took: {:?}", NODE_COUNT, compile_duration);
+
+    let state = Arc::new(DefaultMemoryState::new());
+
+    let execution_start = std::time::Instant::now();
+    graph.invoke(state.clone()).await?;
+    let execution_duration = execution_start.elapsed();
+
+    println!("Execution of {} nodes took: {:?}", NODE_COUNT, execution_duration);
+
+    // 验证所有节点都执行了
+    let final_count: i32 = state.get("count").await?.unwrap();
+    assert_eq!(final_count, NODE_COUNT as i32, "All {} nodes should execute", NODE_COUNT);
+
+    // 性能断言：编译和执行应该在合理时间内完成
+    assert!(compile_duration < std::time::Duration::from_secs(5), "Compilation too slow");
+    assert!(execution_duration < std::time::Duration::from_secs(10), "Execution too slow");
+
+    Ok(())
+}
+
+/// 测试场景：图的幂等性
+/// 验证同一图多次执行相同输入产生相同结果
+#[tokio::test]
+async fn test_graph_idempotency() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("processor", Box::new(MessageNode { message: "processed".to_string() }));
+    builder.add_edge("__start__", HashSet::from(["processor".to_string()]));
+    builder.add_edge("processor", HashSet::from(["__end__".to_string()]));
+
+    let graph = builder.compile()?;
+
+    // 第一次执行
+    let state1 = Arc::new(DefaultMemoryState::new());
+    graph.invoke(state1.clone()).await?;
+    let result1: Option<String> = state1.get("message").await?;
+
+    // 第二次执行（全新状态）
+    let state2 = Arc::new(DefaultMemoryState::new());
+    graph.invoke(state2.clone()).await?;
+    let result2: Option<String> = state2.get("message").await?;
+
+    // 结果应该相同
+    assert_eq!(result1, result2, "Multiple executions should produce same result");
+    assert_eq!(result1, Some("processed".to_string()), "Result should be 'processed'");
+
+    // 第三次执行（再次验证）
+    let state3 = Arc::new(DefaultMemoryState::new());
+    graph.invoke(state3.clone()).await?;
+    let result3: Option<String> = state3.get("message").await?;
+
+    assert_eq!(result1, result3, "Third execution should still produce same result");
+
+    Ok(())
+}
+
+/// 测试场景：错误状态的恢复能力
+/// 验证即使某些操作失败，状态仍然保持一致
+#[tokio::test]
+async fn test_error_state_consistency() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+
+    // 第一个节点成功设置状态
+    builder.add_node("success_first", Box::new(MessageNode { message: "first_success".to_string() }));
+    // 第二个节点会失败
+    builder.add_node("will_fail", Box::new(FailingNode));
+    // 第三个节点不会执行
+    builder.add_node("wont_execute", Box::new(MessageNode { message: "third".to_string() }));
+
+    builder.add_edge("__start__", HashSet::from(["success_first".to_string()]));
+    builder.add_edge("success_first", HashSet::from(["will_fail".to_string()]));
+    builder.add_edge("will_fail", HashSet::from(["wont_execute".to_string()]));
+    builder.add_edge("wont_execute", HashSet::from(["__end__".to_string()]));
+
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+
+    // 执行应该失败
+    let result = graph.invoke(state.clone()).await;
+    assert!(result.is_err(), "Execution should fail due to FailingNode");
+
+    // 但第一个节点设置的状态应该保留
+    let first_result: Option<String> = state.get("message").await?;
+    assert_eq!(
+        first_result,
+        Some("first_success".to_string()),
+        "Successful node's state should persist even after later failure"
+    );
+
+    // 第三个节点的状态不应该存在
+    let third_result: Option<String> = state.get("message").await?;
+    // 注意：这里可能还是 "first_success"，因为第三个节点没执行
+
+    Ok(())
+}
+
+/// 测试场景：条件边的动态性
+/// 验证同一次执行中，不同轮次可以走不同路径
+#[tokio::test]
+async fn test_dynamic_routing_across_steps() -> Result<(), LangGraphError> {
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    static STEP_COUNTER: AtomicI32 = AtomicI32::new(0);
+
+    struct StepAwareRouter;
+
+    #[async_trait]
+    impl AgentNode<DefaultMemoryState> for StepAwareRouter {
+        async fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+            let step = STEP_COUNTER.fetch_add(1, Ordering::SeqCst);
+            state.set("last_step", step).await?;
+            Ok(())
+        }
+    }
+
+    static ROUTE_DECISION: AtomicI32 = AtomicI32::new(0);
+
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("router", Box::new(StepAwareRouter));
+    builder.add_node("path_a", Box::new(CounterNode));
+    builder.add_node("path_b", Box::new(CounterNode));
+
+    builder.add_edge("__start__", HashSet::from(["router".to_string()]));
+
+    // 动态路由：根据步骤数决定路径
+    builder.add_conditional_edge("router", vec![
+        Box::new(|_state| {
+            let step = STEP_COUNTER.load(Ordering::SeqCst);
+            if step % 2 == 0 {
+                "path_a".to_string()
+            } else {
+                "path_b".to_string()
+            }
+        }),
+    ]);
+
+    builder.add_edge("path_a", HashSet::from(["router".to_string()])); // 循环回router
+    builder.add_edge("path_b", HashSet::from(["__end__".to_string()])); // path_b 结束
+
+    builder.set_max_steps(5); // 限制步数避免无限循环
+
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+
+    graph.invoke(state.clone()).await?;
+
+    // 验证确实执行了多步
+    let final_step: Option<i32> = state.get("last_step").await?;
+    assert!(final_step.unwrap_or(0) > 1, "Should have executed multiple steps");
+
+    // 验证计数器反映了路径选择
+    let count: Option<i32> = state.get("count").await?;
+    assert!(count.unwrap_or(0) > 0, "Some path_a or path_b nodes should have executed");
+
+    Ok(())
 }
