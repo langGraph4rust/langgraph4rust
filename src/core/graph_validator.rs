@@ -4,14 +4,14 @@ use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
 
-type ValidationResult<S> = (
-    usize,
-    HashMap<String, Box<dyn AgentNode<S>>>,
-    HashMap<String, HashSet<String>>,
-    HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
-    String,
-    String,
-);
+pub struct ValidatedGraph<S: AgentState> {
+    pub max_steps: usize,
+    pub nodes: HashMap<String, Box<dyn AgentNode<S>>>,
+    pub edges: HashMap<String, HashSet<String>>,
+    pub conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
+    pub start_node: String,
+    pub end_node: String,
+}
 
 pub struct GraphValidator<S: AgentState> {
     pub max_steps: usize,
@@ -23,7 +23,7 @@ pub struct GraphValidator<S: AgentState> {
 }
 
 impl<S: AgentState> GraphValidator<S> {
-    pub fn validate(self) -> Result<ValidationResult<S>, LangGraphError> {
+    pub fn validate(self) -> Result<ValidatedGraph<S>, LangGraphError> {
         Self::validate_max_steps(self.max_steps)?;
         Self::validate_start_end_nodes(&self.start_node, &self.end_node)?;
         Self::validate_nodes_exist(&self.nodes)?;
@@ -35,7 +35,14 @@ impl<S: AgentState> GraphValidator<S> {
         Self::validate_conditional_edges_valid(&self.conditional_edges, &self.nodes, &self.start_node)?;
         Self::validate_no_mixed_edge_types(&self.edges, &self.conditional_edges)?;
 
-        Ok((self.max_steps, self.nodes, self.edges, self.conditional_edges, self.start_node, self.end_node))
+        Ok(ValidatedGraph {
+            max_steps: self.max_steps,
+            nodes: self.nodes,
+            edges: self.edges,
+            conditional_edges: self.conditional_edges,
+            start_node: self.start_node,
+            end_node: self.end_node,
+        })
     }
 
     fn validate_max_steps(max_steps: usize) -> Result<(), LangGraphError> {

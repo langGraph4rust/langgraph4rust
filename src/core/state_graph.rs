@@ -4,7 +4,6 @@ use crate::core::error::LangGraphError;
 use crate::core::graph_validator::GraphValidator;
 use std::collections::{HashMap, HashSet};
 use std::future::ready;
-use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -87,15 +86,15 @@ impl<S: AgentState> StateGraphBuilder<S> {
             end_node: self.end_node,
         };
 
-        let (max_steps, nodes, edges, conditional_edges, start_node, end_node) = validator.validate()?;
+        let validated = validator.validate()?;
 
         Ok(StateGraph {
-            max_steps,
-            nodes,
-            edges,
-            conditional_edges,
-            start_node,
-            end_node,
+            max_steps: validated.max_steps,
+            nodes: validated.nodes,
+            edges: validated.edges,
+            conditional_edges: validated.conditional_edges,
+            start_node: validated.start_node,
+            end_node: validated.end_node,
         })
     }
 }
