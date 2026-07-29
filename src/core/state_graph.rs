@@ -78,12 +78,23 @@ impl<S: AgentState> StateGraphBuilder<S> {
     /// 编译图：消费 builder，校验合法性后生成不可变的 StateGraph
     pub fn compile(self) -> Result<StateGraph<S>, LangGraphError> {
         // 0. max_steps 不能为0，否则无法执行任何节点
-        if self.max_steps == 0 {
+        if self.max_steps <= 0 {
             return Err(LangGraphError::GraphError(
                 "max_steps must be greater than 0".to_string(),
             ));
         }
-        // 1. 节点不能为空
+        // 1. 开始节点和结束节点不能为空
+        if self.start_node.is_empty() {
+            return Err(LangGraphError::GraphError(
+                "Start node cannot be empty".to_string(),
+            ));
+        }
+        if self.end_node.is_empty() {
+            return Err(LangGraphError::GraphError(
+                "End node cannot be empty".to_string(),
+            ));
+        }
+        // 2. 节点不能为空
         if self.nodes.is_empty() {
             return Err(LangGraphError::GraphError(
                 "Graph must contain at least one node".to_string(),
