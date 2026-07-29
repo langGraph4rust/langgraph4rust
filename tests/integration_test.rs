@@ -724,22 +724,18 @@ async fn test_graph_immutability() -> Result<(), LangGraphError> {
 /// 测试场景：最大步数边界值
 /// 验证最大步数为0和1的边界情况
 #[tokio::test]
-async fn test_max_steps_boundary() -> Result<(), LangGraphError> {
+async fn test_max_steps_boundary() {
     let mut builder = StateGraphBuilder::new();
     builder.add_node("counter", Box::new(CounterNode));
     builder.add_edge("__start__", HashSet::from(["counter".to_string()]));
     builder.add_edge("counter", HashSet::from(["counter".to_string()]));
     builder.set_max_steps(0);
     
-    let graph = builder.compile()?;
-
-    let state = Arc::new(DefaultMemoryState::new());
-    graph.invoke(state.clone()).await?;
-
-    let count: i32 = state.get("count").await?.unwrap_or(0);
-    assert_eq!(count, 0, "Max steps of 0 should execute nothing");
-
-    Ok(())
+    let result = builder.compile();
+    
+    // max_steps=0 时编译应该报错
+    assert!(matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("max_steps must be greater than 0")),
+            "max_steps=0 should fail at compile time");
 }
 
 /// 测试场景：图执行后状态可继续使用
@@ -820,8 +816,9 @@ async fn test_empty_node_name() {
     
     let result = builder.compile();
     
-    // 当前代码允许空节点名称，但这不是好的实践
-    assert!(result.is_ok(), "Empty node name should compile");
+    // 编译时应该报错：节点名称不能为空
+    assert!(matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("Node name cannot be empty")),
+            "Empty node name should fail at compile time");
 }
 
 /// 测试场景：边指向已删除节点
@@ -1217,27 +1214,20 @@ async fn test_batch_apply_single_error() -> Result<(), LangGraphError> {
 }
 
 /// 测试场景：最大步数为0
-/// 验证 max_steps=0 时的行为
+/// 验证 max_steps=0 时编译会报错
 #[tokio::test]
-async fn test_max_steps_zero() -> Result<(), LangGraphError> {
+async fn test_max_steps_zero() {
     let mut builder = StateGraphBuilder::new();
     builder.add_node("node", Box::new(CounterNode));
     builder.add_edge("__start__", HashSet::from(["node".to_string()]));
     builder.add_edge("node", HashSet::from(["__end__".to_string()]));
     builder.set_max_steps(0);
     
-    let graph = builder.compile()?;
-    let state = Arc::new(DefaultMemoryState::new());
+    let result = builder.compile();
     
-    let result = graph.invoke(state.clone()).await;
-    
-    // max_steps=0 时不执行任何节点
-    assert!(result.is_ok(), "Should complete without executing");
-    
-    let count: Option<i32> = state.get("count").await?;
-    assert!(count.is_none(), "No nodes should have executed");
-    
-    Ok(())
+    // max_steps=0 时编译应该报错
+    assert!(matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("max_steps must be greater than 0")),
+            "Should fail at compile time when max_steps is 0");
 }
 
 /// 测试场景：条件边返回空字符串导致死循环
