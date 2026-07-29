@@ -114,6 +114,11 @@ impl<S: AgentState> StateGraphBuilder<S> {
                 self.start_node
             )));
         }
+        if self.start_node == self.end_node {
+            return Err(LangGraphError::GraphError(
+                "Start node and end node cannot be the same".to_string(),
+            ));
+        }
 
         // 2. start_node 必须有出边（静态边或条件边）
         let start_has_edge = self.edges.contains_key(&self.start_node)
