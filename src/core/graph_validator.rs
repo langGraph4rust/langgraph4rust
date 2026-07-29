@@ -4,7 +4,7 @@ use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
 
-pub struct ValidatedGraph<S: AgentState> {
+pub struct ValidatedGraph<S: AgentState + Send + Sync> {
     pub max_steps: usize,
     pub nodes: HashMap<String, Box<dyn AgentNode<S>>>,
     pub edges: HashMap<String, HashSet<String>>,
@@ -13,7 +13,7 @@ pub struct ValidatedGraph<S: AgentState> {
     pub end_node: String,
 }
 
-pub struct GraphValidator<S: AgentState> {
+pub struct GraphValidator<S: AgentState + Send + Sync> {
     pub max_steps: usize,
     pub nodes: HashMap<String, Box<dyn AgentNode<S>>>,
     pub edges: HashMap<String, HashSet<String>>,
@@ -22,7 +22,7 @@ pub struct GraphValidator<S: AgentState> {
     pub end_node: String,
 }
 
-impl<S: AgentState> GraphValidator<S> {
+impl<S: AgentState + Send + Sync> GraphValidator<S> {
     pub fn validate(self) -> Result<ValidatedGraph<S>, LangGraphError> {
         Self::validate_max_steps(self.max_steps)?;
         Self::validate_start_end_nodes(&self.start_node, &self.end_node)?;

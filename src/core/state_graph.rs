@@ -4,10 +4,11 @@ use crate::core::error::LangGraphError;
 use std::collections::{HashMap, HashSet};
 use std::future::ready;
 use std::sync::Arc;
+use futures::future::join_all;
 use tokio::task::JoinSet;
 
 /// 状态图：编译后的只读图，用于执行工作流
-pub struct StateGraph<S: AgentState> {
+pub struct StateGraph<S: AgentState + Send + Sync> {
     nodes: HashMap<String, Box<dyn AgentNode<S>>>,
     edges: HashMap<String, HashSet<String>>,
     conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
@@ -16,7 +17,7 @@ pub struct StateGraph<S: AgentState> {
     max_steps: usize,
 }
 
-impl<S: AgentState> StateGraph<S> {
+impl<S: AgentState + Send + Sync> StateGraph<S> {
     /// 创建新的状态图（仅供 builder 模块使用）
     pub(crate) fn new(
         max_steps: usize,
@@ -150,16 +151,13 @@ impl<S: AgentState> StateGraph<S> {
         nodes: Vec<&Box<dyn AgentNode<S>>>,
         state: Arc<S>,
     ) -> Result<(), LangGraphError> {
-        let mut batch_tasks: JoinSet<Result<(), LangGraphError>> = JoinSet::new();
-        for node in nodes {
-            let ret = ready(node.apply(Arc::clone(&state)));
-            batch_tasks.spawn(ret);
-        }
-        let results = batch_tasks.join_all().await;
+        let futures: Vec<_> = nodes.into_iter().map(|node| {
+            let state_clone = Arc::clone(&state);
+            async move { node.apply(state_clone).await }
+        }).collect();
+        let results = join_all(futures).await;
         for result in results {
-            if let Err(e) = result {
-                return Err(e);
-            }
+            result?;  // 第一个错误就返回
         }
         Ok(())
     }

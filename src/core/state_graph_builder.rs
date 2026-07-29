@@ -10,7 +10,7 @@ pub const START_NODE: &str = "__start__";
 pub const END_NODE: &str = "__end__";
 
 /// 图构建器：用于构建图结构，compile 后生成 StateGraph
-pub struct StateGraphBuilder<S: AgentState> {
+pub struct StateGraphBuilder<S: AgentState + Send + Sync> {
     nodes: HashMap<String, Box<dyn AgentNode<S>>>,
     edges: HashMap<String, HashSet<String>>,
     conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
@@ -19,7 +19,7 @@ pub struct StateGraphBuilder<S: AgentState> {
     max_steps: usize,
 }
 
-impl<S: AgentState> StateGraphBuilder<S> {
+impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     pub fn new() -> Self {
         StateGraphBuilder {
             max_steps: usize::MAX,
