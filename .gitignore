@@ -1,1 +1,28 @@
-/target
+# Build output
+/target/
+
+# Backup files
+**/*.rs.bk
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*~
+.*.swp
+.*.sw?
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
