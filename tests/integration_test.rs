@@ -1337,7 +1337,7 @@ async fn test_static_and_conditional_edges_conflict() {
 }
 
 /// 测试场景：条件边返回 __end__ 节点
-/// 验证条件边直接返回结束节点时能正常终止工作流
+/// 验证条件边直接返回结束节点时能正常终止工作流（不执行任何中间节点）
 #[tokio::test]
 async fn test_conditional_edge_returns_end() -> Result<(), LangGraphError> {
     let mut builder = StateGraphBuilder::new();
@@ -1351,9 +1351,9 @@ async fn test_conditional_edge_returns_end() -> Result<(), LangGraphError> {
     
     graph.invoke(state.clone()).await?;
     
-    // decide 节点应该执行一次
-    let count: i32 = state.get("count").await?.unwrap();
-    assert_eq!(count, 1, "Decision node should execute once");
+    // 由于直接从 start 跳到 end，decide 节点不会执行
+    let count: Option<i32> = state.get("count").await?;
+    assert!(count.is_none(), "No intermediate nodes should execute when jumping directly to end");
     
     Ok(())
 }
