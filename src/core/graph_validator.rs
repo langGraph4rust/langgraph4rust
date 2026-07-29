@@ -60,7 +60,7 @@ impl<S: AgentState + Send + Sync> GraphValidator<S> {
     }
 
     fn validate_max_steps(max_steps: usize) -> Result<(), LangGraphError> {
-        if max_steps <= 0 {
+        if max_steps == 0 {
             return Err(LangGraphError::GraphError(
                 "max_steps must be greater than 0".to_string(),
             ));
