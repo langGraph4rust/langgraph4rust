@@ -1,6 +1,7 @@
 use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
+use crate::core::graph_validator::GraphValidator;
 use std::collections::{HashMap, HashSet};
 use std::future::ready;
 use std::ops::Deref;
@@ -77,108 +78,24 @@ impl<S: AgentState> StateGraphBuilder<S> {
 
     /// 编译图：消费 builder，校验合法性后生成不可变的 StateGraph
     pub fn compile(self) -> Result<StateGraph<S>, LangGraphError> {
-        // 0. max_steps 不能为0，否则无法执行任何节点
-        if self.max_steps <= 0 {
-            return Err(LangGraphError::GraphError(
-                "max_steps must be greater than 0".to_string(),
-            ));
-        }
-        // 1. 开始节点和结束节点不能为空
-        if self.start_node.is_empty() {
-            return Err(LangGraphError::GraphError(
-                "Start node cannot be empty".to_string(),
-            ));
-        }
-        if self.end_node.is_empty() {
-            return Err(LangGraphError::GraphError(
-                "End node cannot be empty".to_string(),
-            ));
-        }
-        // 2. 节点不能为空
-        if self.nodes.is_empty() {
-            return Err(LangGraphError::GraphError(
-                "Graph must contain at least one node".to_string(),
-            ));
-        }
-        // 检查所有节点名称不能为空
-        for name in self.nodes.keys() {
-            if name.is_empty() {
-                return Err(LangGraphError::GraphError(
-                    "Node name cannot be empty".to_string(),
-                ));
-            }
-        }
-        if self.nodes.contains_key(self.start_node.deref()) {
-            return Err(LangGraphError::GraphError(format!(
-                "Start node '{}' cannot be a normal node",
-                self.start_node
-            )));
-        }
-        if self.start_node == self.end_node {
-            return Err(LangGraphError::GraphError(
-                "Start node and end node cannot be the same".to_string(),
-            ));
-        }
-
-        // 2. start_node 必须有出边（静态边或条件边）
-        let start_has_edge = self.edges.contains_key(&self.start_node)
-            || self.conditional_edges.contains_key(&self.start_node);
-        if !start_has_edge {
-            return Err(LangGraphError::GraphError(format!(
-                "Start node '{}' must have at least one outgoing edge",
-                self.start_node
-            )));
-        }
-
-        // 3. 静态边的源/目标必须是已注册节点（或 START_NODE/END_NODE）
-        for (from, targets) in &self.edges {
-            if from != &self.start_node && from != &self.end_node && !self.nodes.contains_key(from)
-            {
-                return Err(LangGraphError::GraphError(format!(
-                    "Static edge source '{}' is not a registered node",
-                    from
-                )));
-            }
-            for target in targets {
-                if target != &self.start_node
-                    && target != &self.end_node
-                    && !self.nodes.contains_key(target)
-                {
-                    return Err(LangGraphError::GraphError(format!(
-                        "Static edge target '{}' (from '{}') is not a registered node",
-                        target, from
-                    )));
-                }
-            }
-        }
-
-        // 4. 条件边的源必须是已注册节点（或 START_NODE）
-        for from in self.conditional_edges.keys() {
-            if from != &self.start_node && !self.nodes.contains_key(from) {
-                return Err(LangGraphError::GraphError(format!(
-                    "Conditional edge source '{}' is not a registered node",
-                    from
-                )));
-            }
-        }
-
-        // 5. 同一节点禁止同时配置静态边和条件边
-        for from in self.edges.keys() {
-            if self.conditional_edges.contains_key(from) {
-                return Err(LangGraphError::GraphError(format!(
-                    "Node '{}' cannot have both static edges and conditional edges",
-                    from
-                )));
-            }
-        }
-
-        Ok(StateGraph {
+        let validator = GraphValidator {
             max_steps: self.max_steps,
             nodes: self.nodes,
             edges: self.edges,
             conditional_edges: self.conditional_edges,
             start_node: self.start_node,
             end_node: self.end_node,
+        };
+
+        let (max_steps, nodes, edges, conditional_edges, start_node, end_node) = validator.validate()?;
+
+        Ok(StateGraph {
+            max_steps,
+            nodes,
+            edges,
+            conditional_edges,
+            start_node,
+            end_node,
         })
     }
 }
