@@ -7,18 +7,107 @@ use std::sync::Arc;
 use futures::future::join_all;
 use tokio::task::JoinSet;
 
-/// 状态图：编译后的只读图，用于执行工作流
+/// Compiled, immutable workflow graph ready for execution.
+///
+/// This is the output of [`StateGraphBuilder::compile()`] and represents a fully
+/// validated workflow that can be executed multiple times with different states.
+/// The graph is immutable after compilation, ensuring thread-safe concurrent usage.
+///
+/// # Type Parameters
+///
+/// - `S`: The state type. Must implement [`AgentState`] + `Send` + `Sync`.
+///
+/// # Lifecycle
+///
+/// 1. **Build**: Create via [`StateGraphBuilder`]
+/// 2. **Compile**: Call [`compile()`](StateGraphBuilder::compile) → produces `StateGraph`
+/// 3. **Execute**: Call [`invoke()`](StateGraph::invoke) one or more times
+/// 4. **Reuse**: Same graph can execute multiple workflows safely
+///
+/// # Immutability
+///
+/// Once compiled, the graph structure cannot be modified. This provides:
+/// - **Thread safety**: Multiple `invoke()` calls can run concurrently (with different states)
+/// - **Predictability**: No runtime modifications to graph structure
+/// - **Performance**: Enables optimization opportunities
+///
+/// # Execution Model
+///
+/// The graph executes using a **step-based traversal** algorithm:
+///
+/// ```text
+/// START → [Node A] → [Node B, C] → END
+///              ↓           ↘        ↑
+///           (parallel)    (parallel)
+/// ```
+///
+/// - Starts at the configured start node
+/// - Follows edges (static or conditional) to determine next nodes
+/// - Executes all nodes at the current level in parallel
+/// - Continues until reaching the end node or error/termination condition
+///
+/// # Example
+///
+/// ```rust
+/// use langgraph4rust::*;
+/// use std::collections::HashSet;
+/// use std::sync::Arc;
+///
+/// // Build and compile graph
+/// let mut builder = StateGraphBuilder::new();
+/// // ... add nodes and edges ...
+/// let graph = builder.compile()?;
+///
+/// // Execute multiple times with different states
+/// for i in 0..10 {
+///     let state = Arc::new(DefaultMemoryState::new());
+///     state.set("iteration", i).await?;
+///     graph.invoke(state).await?;
+/// }
+/// ```
+///
+/// # Error Handling
+///
+/// Errors during execution propagate immediately:
+/// - Node errors stop execution at that point
+/// - State errors prevent further state access
+/// - Graph structural errors shouldn't occur (validated at compile time)
+///
+/// See [`LangGraphError`] for all possible error types.
 pub struct StateGraph<S: AgentState + Send + Sync> {
+    /// Map of node names to their executable implementations
     nodes: HashMap<String, Box<dyn AgentNode<S>>>,
+    /// Static edges: source node -> set of target nodes
     edges: HashMap<String, HashSet<String>>,
+    /// Conditional edges: source node -> list of router functions
     conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
+    /// Entry point node name
     start_node: String,
+    /// Termination node name
     end_node: String,
+    /// Maximum steps before forced termination (safety limit)
     max_steps: usize,
 }
 
 impl<S: AgentState + Send + Sync> StateGraph<S> {
-    /// 创建新的状态图（仅供 builder 模块使用）
+    /// Create a new compiled StateGraph instance.
+    ///
+    /// This is an internal constructor used by [`StateGraphBuilder::compile()`].
+    /// Users should not call this directly; always build graphs through the builder.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_steps` - Maximum execution step count (from builder configuration)
+    /// * `nodes` - Validated map of node names to implementations
+    /// * `edges` - Validated static edge definitions
+    /// * `conditional_edges` - Validated conditional edge definitions
+    /// * `start_node` - Start node identifier
+    /// * `end_node` - End node identifier
+    ///
+    /// # Safety
+    ///
+    /// All parameters are assumed to be validated by [`GraphValidator`].
+    /// Passing unvalidated data may cause panics or undefined behavior.
     pub(crate) fn new(
         max_steps: usize,
         nodes: HashMap<String, Box<dyn AgentNode<S>>>,
@@ -37,74 +126,144 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
         }
     }
 
-    /// 执行图：从 start_node 开始，依次执行节点直到 end_node
-
-    fn get_node_by_key(&self, key: &String) -> Result<&Box<dyn AgentNode<S>>, LangGraphError> {
-        Ok(self
-            .nodes
-            .get(key)
-            .ok_or_else(|| LangGraphError::NotFound(format!("Key '{}' not found", key)))?)
-    }
-
-    fn get_node_by_keys(
-        &self,
-        keys: &HashSet<String>,
-    ) -> Result<Vec<&Box<dyn AgentNode<S>>>, LangGraphError> {
-        let mut nodes = Vec::new();
-        for key in keys {
-            let node = self.get_node_by_key(key)?;
-            nodes.push(node);
-        }
-        Ok(nodes)
-    }
-
-    fn is_start_node(&self, keys: HashSet<String>) -> Result<bool, LangGraphError> {
-        if keys.is_empty() {
-            return Ok(false);
-        }
-        if keys.contains(&self.start_node) {
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    fn is_end_node(&self, keys: HashSet<String>) -> Result<bool, LangGraphError> {
-        if keys.is_empty() {
-            return Ok(false);
-        }
-        if keys.contains(&self.end_node) {
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    fn get_next_node_key(
-        &self,
-        keys: &HashSet<String>,
-        state: &S,
-    ) -> Result<HashSet<String>, LangGraphError> {
-        if keys.is_empty() {
-            return Ok(HashSet::new());
-        }
-        let mut next_node_keys = HashSet::new();
-        for key in keys {
-            // 静态边：直接收集目标节点
-            if let Some(targets) = self.edges.get(key) {
-                if !targets.is_empty() {
-                    for target in targets {
-                        next_node_keys.insert(target.clone());
-                    }
-                }
-            }
-            // 条件边：调用 router 求值目标节点
-            if let Some(routers) = self.conditional_edges.get(key) {
-                for router in routers {
-                    next_node_keys.insert(router(state));
-                }
-            }
-        }
-        Ok(next_node_keys)
-    }
+    /// Execute the workflow graph with the given initial state.
+    ///
+    /// This is the primary method for running a compiled workflow. It traverses
+    /// the graph from the start node to the end node, executing nodes and
+    /// following edges according to their definitions.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - Initial state for this execution. The state is shared across
+    ///   all nodes and persists throughout the entire workflow execution.
+    ///   Use `Arc::clone()` if you need to retain access to the state afterwards.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())`: Workflow completed successfully (reached end node)
+    /// - `Err(LangGraphError)`: Execution failed due to node errors, state errors,
+    ///   or other runtime issues
+    ///
+    /// # Execution Algorithm
+    ///
+    /// The invocation follows this process:
+    ///
+    /// 1. **Initialize**: Set current position to start node
+    /// 2. **Loop** (until termination or max_steps):
+    ///    a. Check if current position is end node → success
+    ///    b. Check if current position is empty → dead-end error
+    ///    c. Execute all nodes at current level in **parallel**
+    ///    d. Determine next positions from edges (static + conditional)
+    ///    e. Move to next positions
+    /// 3. **Terminate**: Success or error
+    ///
+    /// # Parallel Execution
+    ///
+    /// When a node has multiple outgoing edges (fan-out), all target nodes
+    /// are executed concurrently using `futures::join_all`. This means:
+    ///
+    /// - Nodes at the same "level" run simultaneously
+    /// - Each node gets its own clone of the state Arc
+    /// - State changes are visible to subsequent nodes (same underlying data)
+    /// - If any node fails, execution stops immediately
+    ///
+    /// # Step Counting
+    ///
+    /// Each iteration of the main loop counts as one "step". The `max_steps`
+    /// limit (set during graph construction) prevents infinite loops:
+    ///
+    /// ```text
+    /// Step 1: Execute [A] → Determine next: [B, C]
+    /// Step 2: Execute [B, C] (parallel) → Determine next: [D]
+    /// Step 3: Execute [D] → Determine next: [END]
+    /// Total: 3 steps
+    /// ```
+    ///
+    /// # Error Propagation
+    ///
+    /// Errors are handled as follows:
+    ///
+    /// - **Node errors** ([`LangGraphError::NodeError`]): Immediate failure,
+    ///   no more nodes execute, error returned to caller
+    /// - **State errors** ([`LangGraphError::StateError`]): Same as node errors
+    /// - **Dead-ends** ([`LangGraphError::GraphError`], [`LangGraphError::NotFound`]):
+    ///   When nodes have no outgoing edges but haven't reached END
+    /// - **Max steps exceeded**: Loop terminates without error (may indicate issue)
+    ///
+    /// # State Mutation
+    ///
+    /// Nodes receive `Arc<S>` and can mutate state through get/set operations.
+    /// Changes made by earlier nodes are visible to later nodes because they
+    /// share the same underlying data (through Arc).
+    ///
+    /// **Important**: For truly independent parallel branches, ensure nodes
+    /// write to different keys or handle conflicts explicitly.
+    ///
+    /// # Thread Safety
+    ///
+    /// The `invoke()` method itself is thread-safe for **concurrent invocations**
+    /// with different state instances. However:
+    ///
+    /// - Do NOT call `invoke()` concurrently with the SAME state instance
+    /// - The graph itself can be shared across threads (`StateGraph` is Send+Sync)
+    /// - Individual state instances must be thread-safe (which `DefaultMemoryState` is)
+    ///
+    /// # Example - Basic Usage
+    ///
+    /// ```rust
+    /// use langgraph4rust::*;
+    /// use std::sync::Arc;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), LangGraphError> {
+    ///     let mut builder = StateGraphBuilder::new();
+    ///     // ... configure graph ...
+    ///     let graph = builder.compile()?;
+    ///
+    ///     let state = Arc::new(DefaultMemoryState::new());
+    ///     state.set("input", "hello").await?;
+    ///
+    ///     graph.invoke(state).await?;
+    ///
+    ///     println!("Workflow complete!");
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Example - Multiple Executions
+    ///
+    /// ```rust
+    /// # use langgraph4rust::*;
+    /// # use std::sync::Arc;
+    /// # tokio_test::block_on(async {
+    /// # let graph = /* compiled graph */;
+    /// // Reuse the same graph multiple times
+    /// for id in 0..5 {
+    ///     let state = Arc::new(DefaultMemoryState::new());
+    ///     state.set("request_id", id).await?;
+    ///
+    ///     match graph.invoke(state.clone()).await {
+    ///         Ok(()) => println!("Request {} succeeded", id),
+    ///         Err(e) => eprintln!("Request {} failed: {}", id, e),
+    ///     }
+    /// }
+    /// # Ok::<(), LangGraphError>(())
+    /// # });
+    /// ```
+    ///
+    /// # Performance Characteristics
+    ///
+    /// - **Time complexity**: O(S × N) where S = steps, N = avg nodes per step
+    /// - **Space complexity**: O(N) for storing active nodes at each step
+    /// - **Parallelism**: Automatic fan-out when edges have multiple targets
+    /// - **Overhead**: Minimal; each step involves hashmap lookups and async spawning
+    ///
+    /// # Panics
+    ///
+    /// This method should not panic under normal circumstances. Possible panic sources:
+    /// - Router function panics (caught and converted to error)
+    /// - Node implementation panics (caught and converted to error)
+    /// - Internal logic errors (indicates bug in langgraph4rust itself)
     pub async fn invoke(&self, state: Arc<S>) -> Result<(), LangGraphError> {
         let mut current = HashSet::new();
         current.insert(self.start_node.to_string());
@@ -145,7 +304,122 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
         Ok(())
     }
 
+    /// Retrieve a single node reference by its name.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The node name to look up
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(&Box<dyn AgentNode<S>>)` - Reference to the node implementation
+    /// - `Err(LangGraphError::NotFound)` - If node name doesn't exist
+    fn get_node_by_key(&self, key: &String) -> Result<&Box<dyn AgentNode<S>>, LangGraphError> {
+        Ok(self
+            .nodes
+            .get(key)
+            .ok_or_else(|| LangGraphError::NotFound(format!("Key '{}' not found", key)))?)
+    }
 
+    /// Retrieve multiple node references by their names.
+    ///
+    /// # Arguments
+    ///
+    /// * `keys` - Set of node names to retrieve
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Vec<&Box<dyn AgentNode<S>>>)` - Vector of node references
+    /// - `Err(LangGraphError::NotFound)` - If any node name doesn't exist
+    fn get_node_by_keys(
+        &self,
+        keys: &HashSet<String>,
+    ) -> Result<Vec<&Box<dyn AgentNode<S>>>, LangGraphError> {
+        let mut nodes = Vec::new();
+        for key in keys {
+            let node = self.get_node_by_key(key)?;
+            nodes.push(node);
+        }
+        Ok(nodes)
+    }
+
+    /// Check if any of the provided keys matches the start node.
+    fn is_start_node(&self, keys: HashSet<String>) -> Result<bool, LangGraphError> {
+        if keys.is_empty() {
+            return Ok(false);
+        }
+        if keys.contains(&self.start_node) {
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Check if any of the provided keys matches the end node.
+    fn is_end_node(&self, keys: HashSet<String>) -> Result<bool, LangGraphError> {
+        if keys.is_empty() {
+            return Ok(false);
+        }
+        if keys.contains(&self.end_node) {
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Determine the next set of node keys based on current position and state.
+    ///
+    /// Resolves both static edges and conditional edges to produce the complete
+    /// set of nodes to execute in the next step.
+    ///
+    /// # Arguments
+    ///
+    /// * `keys` - Current set of active node names
+    /// * `state` - Current state (used by conditional edge routers)
+    ///
+    /// # Returns
+    ///
+    /// Set of node names for the next execution step
+    fn get_next_node_key(
+        &self,
+        keys: &HashSet<String>,
+        state: &S,
+    ) -> Result<HashSet<String>, LangGraphError> {
+        if keys.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let mut next_node_keys = HashSet::new();
+        for key in keys {
+            // Static edges: collect targets directly
+            if let Some(targets) = self.edges.get(key) {
+                if !targets.is_empty() {
+                    for target in targets {
+                        next_node_keys.insert(target.clone());
+                    }
+                }
+            }
+            // Conditional edges: evaluate router functions
+            if let Some(routers) = self.conditional_edges.get(key) {
+                for router in routers {
+                    next_node_keys.insert(router(state));
+                }
+            }
+        }
+        Ok(next_node_keys)
+    }
+
+    /// Execute multiple nodes in parallel and collect results.
+    ///
+    /// Spawns async tasks for each node and awaits all of them.
+    /// Returns the first error encountered, if any.
+    ///
+    /// # Arguments
+    ///
+    /// * `nodes` - Slice of node references to execute
+    /// * `state` - Shared state passed to each node
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())`: All nodes executed successfully
+    /// - `Err(LangGraphError)`: First error from any node
     async fn batch_apply(
         &self,
         nodes: Vec<&Box<dyn AgentNode<S>>>,
@@ -157,7 +431,7 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
         }).collect();
         let results = join_all(futures).await;
         for result in results {
-            result?;  // 第一个错误就返回
+            result?;  // Return first error immediately
         }
         Ok(())
     }
