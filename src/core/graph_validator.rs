@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::core::RouterFn;
 use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
@@ -8,7 +9,7 @@ pub struct ValidatedGraph<S: AgentState + Send + Sync> {
     pub max_steps: usize,
     pub nodes: HashMap<String, Box<dyn AgentNode<S>>>,
     pub edges: HashMap<String, HashSet<String>>,
-    pub conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
+    pub conditional_edges: HashMap<String, Vec<RouterFn<S>>>,
     pub start_node: String,
     pub end_node: String,
 }
@@ -17,7 +18,7 @@ pub struct GraphValidator<S: AgentState + Send + Sync> {
     pub max_steps: usize,
     pub nodes: HashMap<String, Box<dyn AgentNode<S>>>,
     pub edges: HashMap<String, HashSet<String>>,
-    pub conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
+    pub conditional_edges: HashMap<String, Vec<RouterFn<S>>>,
     pub start_node: String,
     pub end_node: String,
 }
@@ -133,7 +134,7 @@ impl<S: AgentState + Send + Sync> GraphValidator<S> {
     fn validate_start_has_outgoing_edges(
         start_node: &str,
         edges: &HashMap<String, HashSet<String>>,
-        conditional_edges: &HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
+        conditional_edges: &HashMap<String, Vec<RouterFn<S>>>,
     ) -> Result<(), LangGraphError> {
         let start_has_edge =
             edges.contains_key(start_node) || conditional_edges.contains_key(start_node);
@@ -172,7 +173,7 @@ impl<S: AgentState + Send + Sync> GraphValidator<S> {
     }
 
     fn validate_conditional_edges_valid(
-        conditional_edges: &HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
+        conditional_edges: &HashMap<String, Vec<RouterFn<S>>>,
         nodes: &HashMap<String, Box<dyn AgentNode<S>>>,
         start_node: &str,
     ) -> Result<(), LangGraphError> {
@@ -189,7 +190,7 @@ impl<S: AgentState + Send + Sync> GraphValidator<S> {
 
     fn validate_no_mixed_edge_types(
         edges: &HashMap<String, HashSet<String>>,
-        conditional_edges: &HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
+        conditional_edges: &HashMap<String, Vec<RouterFn<S>>>,
     ) -> Result<(), LangGraphError> {
         for from in edges.keys() {
             if conditional_edges.contains_key(from) {

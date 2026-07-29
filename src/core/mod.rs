@@ -6,3 +6,6 @@ pub mod state_graph;
 pub(crate) mod state_graph_builder;
 
 pub use error::LangGraphError;
+
+/// Type alias for conditional edge router functions.
+pub(crate) type RouterFn<S> = Box<dyn Fn(&S) -> String>;

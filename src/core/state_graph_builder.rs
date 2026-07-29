@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::state_graph::StateGraph;
+use crate::core::RouterFn;
 use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
@@ -168,8 +169,6 @@ pub struct StateGraphBuilder<S: AgentState + Send + Sync> {
     /// Maximum execution steps before forced termination
     max_steps: usize,
 }
-
-type RouterFn<S> = Box<dyn Fn(&S) -> String>;
 
 impl<S: AgentState + Send + Sync> Default for StateGraphBuilder<S> {
     fn default() -> Self {
@@ -415,11 +414,7 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     ///
     /// During compilation, the system verifies routers return valid node names
     /// where possible (static analysis). Runtime validation catches invalid returns.
-    pub fn add_conditional_edge(
-        &mut self,
-        from: &str,
-        routers: Vec<Box<dyn Fn(&S) -> String>>,
-    ) -> &mut Self {
+    pub fn add_conditional_edge(&mut self, from: &str, routers: Vec<RouterFn<S>>) -> &mut Self {
         self.conditional_edges.insert(from.to_string(), routers);
         self
     }

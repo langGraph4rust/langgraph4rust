@@ -1,3 +1,4 @@
+use crate::core::RouterFn;
 use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
@@ -94,7 +95,7 @@ pub struct StateGraph<S: AgentState + Send + Sync> {
     /// Static edges: source node -> set of target nodes
     edges: HashMap<String, HashSet<String>>,
     /// Conditional edges: source node -> list of router functions
-    conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
+    conditional_edges: HashMap<String, Vec<RouterFn<S>>>,
     /// Entry point node name
     start_node: String,
     /// Termination node name
@@ -126,7 +127,7 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
         max_steps: usize,
         nodes: HashMap<String, Box<dyn AgentNode<S>>>,
         edges: HashMap<String, HashSet<String>>,
-        conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
+        conditional_edges: HashMap<String, Vec<RouterFn<S>>>,
         start_node: String,
         end_node: String,
     ) -> Self {
@@ -322,7 +323,7 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
             if step_count >= max_steps {
                 break;
             }
-            step_count = step_count + 1;
+            step_count += 1;
             if self.is_end_node(current.clone())? {
                 current.remove(&self.end_node);
             }
@@ -361,11 +362,11 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
     ///
     /// - `Ok(&Box<dyn AgentNode<S>>)` - Reference to the node implementation
     /// - `Err(LangGraphError::NotFound)` - If node name doesn't exist
-    fn get_node_by_key(&self, key: &String) -> Result<&Box<dyn AgentNode<S>>, LangGraphError> {
-        Ok(self
-            .nodes
+    fn get_node_by_key(&self, key: &String) -> Result<&dyn AgentNode<S>, LangGraphError> {
+        self.nodes
             .get(key)
-            .ok_or_else(|| LangGraphError::NotFound(format!("Key '{}' not found", key)))?)
+            .ok_or_else(|| LangGraphError::NotFound(format!("Key '{}' not found", key)))
+            .map(|node| node.as_ref())
     }
 
     /// Retrieve multiple node references by their names.
@@ -381,7 +382,7 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
     fn get_node_by_keys(
         &self,
         keys: &HashSet<String>,
-    ) -> Result<Vec<&Box<dyn AgentNode<S>>>, LangGraphError> {
+    ) -> Result<Vec<&dyn AgentNode<S>>, LangGraphError> {
         let mut nodes = Vec::new();
         for key in keys {
             let node = self.get_node_by_key(key)?;
@@ -469,7 +470,7 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
     /// - `Err(LangGraphError)`: First error from any node
     async fn batch_apply(
         &self,
-        nodes: Vec<&Box<dyn AgentNode<S>>>,
+        nodes: Vec<&dyn AgentNode<S>>,
         state: Arc<S>,
     ) -> Result<(), LangGraphError> {
         let futures: Vec<_> = nodes
