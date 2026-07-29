@@ -2,6 +2,23 @@
 name = "langgraph4rust"
 version = "0.1.0"
 edition = "2024"
+authors = ["Your Name <your.email@example.com>"]
+license = "Apache-2.0"
+description = "A powerful Rust implementation of a stateful workflow engine inspired by Python's LangGraph"
+repository = "https://github.com/langGraph4rust/langgrap4rust"
+keywords = ["workflow", "graph", "state-machine", "async", "langgraph"]
+categories = ["asynchronous", "data-structures", "development-tools"]
+readme = "README.md"
+documentation = "https://docs.rs/langgraph4rust"
+homepage = "https://github.com/langGraph4rust/langgrap4rust#readme"
+exclude = [
+    ".gitignore",
+    ".github/",
+    "target/",
+    "*.lock",
+    "examples/",
+    "tests/",
+]
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
@@ -10,5 +27,17 @@ tokio = { version = "1.53.1", features = ["full"] }
 async-trait = "0.1.91"
 futures = "0.3.30"
 
-# Example dependencies
+[dev-dependencies]
 chrono = { version = "0.4.40", features = ["serde"] }
+
+[[example]]
+name = "hello_world"
+path = "examples/hello_world.rs"
+
+[[example]]
+name = "conditional_routing"
+path = "examples/conditional_routing.rs"
+
+[[example]]
+name = "parallel_execution"
+path = "examples/parallel_execution.rs"
