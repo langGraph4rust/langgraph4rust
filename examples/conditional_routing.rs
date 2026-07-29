@@ -13,10 +13,10 @@
 //! cargo run --example conditional_routing
 //! ```
 
+use async_trait::async_trait;
 use langgraph4rust::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use async_trait::async_trait;
 // ============================================================================
 // Node Definitions
 // ============================================================================
@@ -42,7 +42,9 @@ impl AgentNode<DefaultMemoryState> for RequestReceiver {
 
         state.set("request_id", request_id).await?;
         state.set("priority", priority).await?;
-        state.set("received_at", chrono::Utc::now().to_rfc3339()).await?;
+        state
+            .set("received_at", chrono::Utc::now().to_rfc3339())
+            .await?;
 
         Ok(())
     }
@@ -134,7 +136,10 @@ impl AgentNode<DefaultMemoryState> for RequestCompleter {
         let completion = HashMap::from([
             ("status".to_string(), "completed".to_string()),
             ("completed_at".to_string(), chrono::Utc::now().to_rfc3339()),
-            ("handler".to_string(), handler.unwrap_or_else(|| "unknown".to_string())),
+            (
+                "handler".to_string(),
+                handler.unwrap_or_else(|| "unknown".to_string()),
+            ),
         ]);
 
         state.set("completion", completion).await?;
@@ -166,8 +171,9 @@ async fn main() -> Result<(), LangGraphError> {
     builder.add_edge(START_NODE, HashSet::from(["receive".to_string()]));
 
     // Add conditional edge from receiver based on priority
-    builder.add_conditional_edge("receive", vec![
-        Box::new(|state| {
+    builder.add_conditional_edge(
+        "receive",
+        vec![Box::new(|state| {
             // Note: In conditional edges, we need to handle the async get differently
             // For this example, we'll use a simple pattern matching approach
             let priority = "normal"; // Default fallback
@@ -176,8 +182,8 @@ async fn main() -> Result<(), LangGraphError> {
                 "normal" => "standard".to_string(),
                 _ => "batch".to_string(),
             }
-        }),
-    ]);
+        })],
+    );
 
     // All handlers converge to completer
     builder.add_edge("fast_track", HashSet::from(["complete".to_string()]));

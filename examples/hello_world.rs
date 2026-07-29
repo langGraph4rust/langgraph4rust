@@ -9,10 +9,10 @@
 //! cargo run --example hello_world
 //! ```
 
+use async_trait::async_trait;
 use langgraph4rust::*;
 use std::collections::HashSet;
 use std::sync::Arc;
-use async_trait::async_trait;
 
 /// A simple node that prints a greeting message and stores it in state
 #[derive(Clone)]

@@ -6,11 +6,11 @@
 //! cargo run --example parallel_execution
 //! ```
 
+use async_trait::async_trait;
 use langgraph4rust::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use async_trait::async_trait;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 #[derive(Clone)]
 struct UserFetcher;
@@ -82,10 +82,10 @@ async fn main() -> Result<(), LangGraphError> {
     builder.add_node("aggregate", Box::new(Aggregator));
 
     // Fan-out pattern
-    builder.add_edge(START_NODE, HashSet::from([
-        "fetch_user".to_string(),
-        "fetch_products".to_string(),
-    ]));
+    builder.add_edge(
+        START_NODE,
+        HashSet::from(["fetch_user".to_string(), "fetch_products".to_string()]),
+    );
 
     builder.add_edge("fetch_user", HashSet::from(["aggregate".to_string()]));
     builder.add_edge("fetch_products", HashSet::from(["aggregate".to_string()]));

@@ -1,10 +1,10 @@
+use crate::core::error::LangGraphError;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, from_value, to_value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-use serde_json::{from_value, to_value, Value};
-use crate::core::error::LangGraphError;
 
 /// Trait defining the interface for workflow state management.
 ///
@@ -110,7 +110,10 @@ pub trait AgentState {
     /// # Ok::<(), LangGraphError>(())
     /// # });
     /// ```
-    async fn get<T: DeserializeOwned + Send + Sync>(&self, key: &str) -> Result<Option<T>, LangGraphError>;
+    async fn get<T: DeserializeOwned + Send + Sync>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>, LangGraphError>;
 
     /// Store a value in the state under the given key.
     ///
@@ -158,7 +161,11 @@ pub trait AgentState {
     /// # Ok::<(), LangGraphError>(())
     /// # });
     /// ```
-    async fn set<T: Serialize + Send + Sync>(&self, key: &str, value: T) -> Result<bool, LangGraphError>;
+    async fn set<T: Serialize + Send + Sync>(
+        &self,
+        key: &str,
+        value: T,
+    ) -> Result<bool, LangGraphError>;
 }
 
 /// Default in-memory implementation of [`AgentState`] using JSON storage.
@@ -256,20 +263,28 @@ impl Default for DefaultMemoryState {
 
 #[async_trait::async_trait]
 impl AgentState for DefaultMemoryState {
-    async fn get<T: DeserializeOwned + Send + Sync>(&self, key: &str) -> Result<Option<T>, LangGraphError> {
+    async fn get<T: DeserializeOwned + Send + Sync>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>, LangGraphError> {
         let memory = self.memory.read().await;
 
         match memory.get(key) {
             Some(value) => {
-                let result = from_value(value.clone())
-                    .map_err(|e| LangGraphError::StateError(format!("Deserialization error: {}", e)))?;
+                let result = from_value(value.clone()).map_err(|e| {
+                    LangGraphError::StateError(format!("Deserialization error: {}", e))
+                })?;
                 Ok(Some(result))
             }
             None => Ok(None),
         }
     }
 
-    async fn set<T: Serialize + Send + Sync>(&self, key: &str, value: T) -> Result<bool, LangGraphError> {
+    async fn set<T: Serialize + Send + Sync>(
+        &self,
+        key: &str,
+        value: T,
+    ) -> Result<bool, LangGraphError> {
         let json_value = to_value(value)
             .map_err(|e| LangGraphError::StateError(format!("Serialization error: {}", e)))?;
 

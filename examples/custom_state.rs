@@ -9,10 +9,10 @@
 //! cargo run --example custom_state
 //! ```
 
+use async_trait::async_trait;
 use langgraph4rust::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use async_trait::async_trait;
 
 // ============================================================================
 // Custom State Implementation with Audit Logging
@@ -41,12 +41,16 @@ impl AuditedState {
 
 #[async_trait::async_trait]
 impl AgentState for AuditedState {
-    async fn get<T: serde::de::DeserializeOwned + Send + Sync>(&self, key: &str) -> Result<Option<T>, LangGraphError> {
+    async fn get<T: serde::de::DeserializeOwned + Send + Sync>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>, LangGraphError> {
         let data = self.data.read().await;
         match data.get(key) {
             Some(value) => {
-                let result: T = serde_json::from_value(value.clone())
-                    .map_err(|e| LangGraphError::StateError(format!("Deserialization error: {}", e)))?;
+                let result: T = serde_json::from_value(value.clone()).map_err(|e| {
+                    LangGraphError::StateError(format!("Deserialization error: {}", e))
+                })?;
 
                 // Log the read operation (use debug representation)
                 let log_entry = format!("READ {} = <value of type>", key);
@@ -55,13 +59,20 @@ impl AgentState for AuditedState {
                 Ok(Some(result))
             }
             None => {
-                self.audit_log.lock().unwrap().push(format!("READ {} = <not found>", key));
+                self.audit_log
+                    .lock()
+                    .unwrap()
+                    .push(format!("READ {} = <not found>", key));
                 Ok(None)
             }
         }
     }
 
-    async fn set<T: serde::Serialize + Send + Sync>(&self, key: &str, value: T) -> Result<bool, LangGraphError> {
+    async fn set<T: serde::Serialize + Send + Sync>(
+        &self,
+        key: &str,
+        value: T,
+    ) -> Result<bool, LangGraphError> {
         let json_value = serde_json::to_value(value)
             .map_err(|e| LangGraphError::StateError(format!("Serialization error: {}", e)))?;
 

@@ -1,9 +1,9 @@
+use async_trait::async_trait;
 use langgraph4rust::{
     AgentNode, AgentState, DefaultMemoryState, LangGraphError, StateGraphBuilder,
 };
-use std::sync::Arc;
 use std::collections::HashSet;
-use async_trait::async_trait;
+use std::sync::Arc;
 
 // ============================================================================
 // 场景1: 自定义 AgentState 实现 - 验证 trait 可扩展性
@@ -31,22 +31,34 @@ impl LoggingState {
 
 #[async_trait::async_trait]
 impl AgentState for LoggingState {
-    async fn get<T: serde::de::DeserializeOwned + Send + Sync>(&self, key: &str) -> Result<Option<T>, LangGraphError> {
+    async fn get<T: serde::de::DeserializeOwned + Send + Sync>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>, LangGraphError> {
         let data = self.data.read().await;
         match data.get(key) {
             Some(value) => {
-                let result: T = serde_json::from_value(value.clone())
-                    .map_err(|e| LangGraphError::StateError(format!("Deserialization error: {}", e)))?;
+                let result: T = serde_json::from_value(value.clone()).map_err(|e| {
+                    LangGraphError::StateError(format!("Deserialization error: {}", e))
+                })?;
                 Ok(Some(result))
             }
             None => Ok(None),
         }
     }
 
-    async fn set<T: serde::Serialize + Send + Sync>(&self, key: &str, value: T) -> Result<bool, LangGraphError> {
+    async fn set<T: serde::Serialize + Send + Sync>(
+        &self,
+        key: &str,
+        value: T,
+    ) -> Result<bool, LangGraphError> {
         // 使用 JSON 序列化作为日志（避免 Debug trait 约束）
-        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "non-serializable".to_string());
-        self.logs.lock().unwrap().push(format!("SET {} = {}", key, value_json));
+        let value_json =
+            serde_json::to_string(&value).unwrap_or_else(|_| "non-serializable".to_string());
+        self.logs
+            .lock()
+            .unwrap()
+            .push(format!("SET {} = {}", key, value_json));
         let json_value = serde_json::to_value(value)
             .map_err(|e| LangGraphError::StateError(format!("Serialization error: {}", e)))?;
 
@@ -95,7 +107,6 @@ async fn test_custom_agent_state_implementation() -> Result<(), LangGraphError> 
 
 #[tokio::test]
 async fn test_concurrent_state_read_write_safety() -> Result<(), LangGraphError> {
-
     let state = Arc::new(DefaultMemoryState::new());
     let mut handles = vec![];
 
@@ -110,8 +121,15 @@ async fn test_concurrent_state_read_write_safety() -> Result<(), LangGraphError>
     // 收集所有写入结果
     for handle in handles {
         match handle.await {
-            Ok(inner_result) => { inner_result?; },
-            Err(join_err) => return Err(LangGraphError::NodeError(format!("Task join error: {}", join_err))),
+            Ok(inner_result) => {
+                inner_result?;
+            }
+            Err(join_err) => {
+                return Err(LangGraphError::NodeError(format!(
+                    "Task join error: {}",
+                    join_err
+                )));
+            }
         }
     }
 
@@ -149,13 +167,21 @@ async fn test_concurrent_state_mixed_operations() -> Result<(), LangGraphError> 
     for handle in handles {
         match handle.await {
             Ok(inner_result) => inner_result?,
-            Err(join_err) => return Err(LangGraphError::NodeError(format!("Task join error: {}", join_err))),
+            Err(join_err) => {
+                return Err(LangGraphError::NodeError(format!(
+                    "Task join error: {}",
+                    join_err
+                )));
+            }
         }
     }
 
     // 验证最终值（由于并发，确切值不确定，但应该 > 0）
     let final_value: Option<i32> = state.get("counter").await?;
-    assert!(final_value.unwrap_or(0) > 0, "Counter should have been incremented");
+    assert!(
+        final_value.unwrap_or(0) > 0,
+        "Counter should have been incremented"
+    );
 
     Ok(())
 }
@@ -166,7 +192,7 @@ async fn test_concurrent_state_mixed_operations() -> Result<(), LangGraphError> 
 
 #[tokio::test]
 async fn test_json_null_value_handling() -> Result<(), LangGraphError> {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     let state = Arc::new(DefaultMemoryState::new());
 
@@ -182,7 +208,7 @@ async fn test_json_null_value_handling() -> Result<(), LangGraphError> {
 
 #[tokio::test]
 async fn test_json_array_with_nulls() -> Result<(), LangGraphError> {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     let state = Arc::new(DefaultMemoryState::new());
 
@@ -200,7 +226,7 @@ async fn test_json_array_with_nulls() -> Result<(), LangGraphError> {
 
 #[tokio::test]
 async fn test_deeply_nested_json_structure() -> Result<(), LangGraphError> {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     let state = Arc::new(DefaultMemoryState::new());
 
@@ -215,8 +241,9 @@ async fn test_deeply_nested_json_structure() -> Result<(), LangGraphError> {
 
     // 验证能正确读取深层值
     let retrieved: Value = state.get("deep").await?.unwrap();
-    let deep_value = retrieved["l1"]["l2"]["l3"]["l4"]["l5"]
-        ["l6"]["l7"]["l8"]["l9"]["l10"].as_str().unwrap();
+    let deep_value = retrieved["l1"]["l2"]["l3"]["l4"]["l5"]["l6"]["l7"]["l8"]["l9"]["l10"]
+        .as_str()
+        .unwrap();
 
     assert_eq!(deep_value, "deep_value");
 
@@ -238,12 +265,30 @@ async fn test_special_characters_in_json_keys_and_values() -> Result<(), LangGra
     state.set("unicode", "éàü 日本語 🎉").await?;
 
     // 验证所有特殊字符都能正确存储和读取
-    assert_eq!(state.get::<String>("key with spaces").await?, Some("value1".to_string()));
-    assert_eq!(state.get::<String>("key-with-dashes").await?, Some("value2".to_string()));
-    assert_eq!(state.get::<String>("key.with.dots").await?, Some("value3".to_string()));
-    assert_eq!(state.get::<String>("中文键名").await?, Some("中文值".to_string()));
-    assert_eq!(state.get::<String>("emoji😀key").await?, Some("emoji value".to_string()));
-    assert_eq!(state.get::<String>("unicode").await?, Some("éàü 日本語 🎉".to_string()));
+    assert_eq!(
+        state.get::<String>("key with spaces").await?,
+        Some("value1".to_string())
+    );
+    assert_eq!(
+        state.get::<String>("key-with-dashes").await?,
+        Some("value2".to_string())
+    );
+    assert_eq!(
+        state.get::<String>("key.with.dots").await?,
+        Some("value3".to_string())
+    );
+    assert_eq!(
+        state.get::<String>("中文键名").await?,
+        Some("中文值".to_string())
+    );
+    assert_eq!(
+        state.get::<String>("emoji😀key").await?,
+        Some("emoji value".to_string())
+    );
+    assert_eq!(
+        state.get::<String>("unicode").await?,
+        Some("éàü 日本語 🎉".to_string())
+    );
 
     Ok(())
 }
@@ -277,7 +322,10 @@ async fn test_all_error_variants_display() {
 async fn test_error_debug_formatting() {
     let error = LangGraphError::NodeError("test error".to_string());
     let debug_output = format!("{:?}", error);
-    assert!(debug_output.contains("NodeError"), "Debug should contain variant name");
+    assert!(
+        debug_output.contains("NodeError"),
+        "Debug should contain variant name"
+    );
 }
 
 #[tokio::test]
@@ -393,9 +441,10 @@ async fn test_conditional_edge_returns_nonexistent_node() -> Result<(), LangGrap
     builder.add_edge("__start__", HashSet::from(["router".to_string()]));
 
     // router 返回一个不存在的节点名
-    builder.add_conditional_edge("router", vec![
-        Box::new(|_state| "nonexistent_node".to_string()),
-    ]);
+    builder.add_conditional_edge(
+        "router",
+        vec![Box::new(|_state| "nonexistent_node".to_string())],
+    );
 
     builder.add_edge("valid_target", HashSet::from(["__end__".to_string()]));
 
@@ -428,9 +477,7 @@ async fn test_conditional_edge_returns_empty_string() -> Result<(), LangGraphErr
     builder.add_edge("__start__", HashSet::from(["router".to_string()]));
 
     // router 返回空字符串
-    builder.add_conditional_edge("router", vec![
-        Box::new(|_state| String::new()),
-    ]);
+    builder.add_conditional_edge("router", vec![Box::new(|_state| String::new())]);
 
     let graph = builder.compile()?;
     let state = Arc::new(DefaultMemoryState::new());

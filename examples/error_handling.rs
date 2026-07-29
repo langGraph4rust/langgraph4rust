@@ -68,7 +68,9 @@ impl AgentNode<DefaultMemoryState> for StateErrorNode {
         state.set("value", "hello").await?;
 
         // Try to read it as an integer (will fail)
-        let _: i32 = state.get("value").await?
+        let _: i32 = state
+            .get("value")
+            .await?
             .ok_or_else(|| LangGraphError::StateError("Value not found".to_string()))?;
 
         Ok(())
@@ -94,7 +96,7 @@ impl AgentNode<DefaultMemoryState> for ValidatorNode {
             None => {
                 println!("   ❌ Validation failed: 'required_field' missing");
                 Err(LangGraphError::NodeError(
-                    "Validation failed: required field is missing".to_string()
+                    "Validation failed: required field is missing".to_string(),
                 ))
             }
         }
@@ -138,7 +140,10 @@ async fn scenario_1_node_failure() -> Result<(), LangGraphError> {
 
     let mut builder = StateGraphBuilder::new();
     builder.add_node("step1", Box::new(SuccessNode));
-    builder.add_node("step2_fail", Box::new(FailureNode::new("Database connection failed")));
+    builder.add_node(
+        "step2_fail",
+        Box::new(FailureNode::new("Database connection failed")),
+    );
     builder.add_node("step3", Box::new(SuccessNode));
 
     builder.add_edge(START_NODE, HashSet::from(["step1".to_string()]));
@@ -206,7 +211,10 @@ async fn scenario_4_error_recovery_pattern() -> Result<(), LangGraphError> {
 
     // Simulate a main workflow that might fail
     let mut main_builder = StateGraphBuilder::new();
-    main_builder.add_node("risky_operation", Box::new(FailureNode::new("Service unavailable")));
+    main_builder.add_node(
+        "risky_operation",
+        Box::new(FailureNode::new("Service unavailable")),
+    );
     main_builder.add_edge(START_NODE, HashSet::from(["risky_operation".to_string()]));
     main_builder.add_edge("risky_operation", HashSet::from([END_NODE.to_string()]));
 

@@ -12,10 +12,10 @@
 //! cargo run --example data_pipeline
 //! ```
 
+use async_trait::async_trait;
 use langgraph4rust::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use async_trait::async_trait;
 // ============================================================================
 // Node Definitions
 // ============================================================================
@@ -30,9 +30,7 @@ impl AgentNode<DefaultMemoryState> for DataLoader {
         println!("📥 Loading data...");
 
         // Simulate loading some raw data
-        let raw_data: Vec<String> = (1..=5)
-            .map(|i| format!("raw_item_{}", i))
-            .collect();
+        let raw_data: Vec<String> = (1..=5).map(|i| format!("raw_item_{}", i)).collect();
 
         let item_count = raw_data.len();
         state.set("raw_data", raw_data).await?;
@@ -55,7 +53,7 @@ impl AgentNode<DefaultMemoryState> for DataTransformer {
         // Read raw data
         let raw_data: Option<Vec<String>> = state.get("raw_data").await?;
         if let Some(data) = raw_data {
-            let item_count = data.len();  // Save length before moving
+            let item_count = data.len(); // Save length before moving
 
             // Transform each item
             let processed: Vec<String> = data
@@ -88,7 +86,10 @@ impl AgentNode<DefaultMemoryState> for DataValidator {
             Some(data) => {
                 // Simple validation: check all items start with "PROCESSED_"
                 let valid = data.iter().all(|item| item.starts_with("PROCESSED_"));
-                let invalid_count = data.iter().filter(|item| !item.starts_with("PROCESSED_")).count();
+                let invalid_count = data
+                    .iter()
+                    .filter(|item| !item.starts_with("PROCESSED_"))
+                    .count();
 
                 state.set("is_valid", valid).await?;
                 state.set("total_items", data.len()).await?;
@@ -125,7 +126,15 @@ impl AgentNode<DefaultMemoryState> for DataSaver {
 
         // Create a summary report
         let summary = HashMap::from([
-            ("status".to_string(), if is_valid.unwrap_or(false) { "success" } else { "failed" }.to_string()),
+            (
+                "status".to_string(),
+                if is_valid.unwrap_or(false) {
+                    "success"
+                } else {
+                    "failed"
+                }
+                .to_string(),
+            ),
             ("total_items".to_string(), total.unwrap_or(0).to_string()),
             ("timestamp".to_string(), chrono::Utc::now().to_rfc3339()),
         ]);
@@ -133,7 +142,14 @@ impl AgentNode<DefaultMemoryState> for DataSaver {
         state.set("summary", summary).await?;
 
         println!("   Saved summary:");
-        println!("     - Status: {}", if is_valid.unwrap_or(false) { "✅ Success" } else { "❌ Failed" });
+        println!(
+            "     - Status: {}",
+            if is_valid.unwrap_or(false) {
+                "✅ Success"
+            } else {
+                "❌ Failed"
+            }
+        );
         println!("     - Items: {}", total.unwrap_or(0));
         println!("     - Timestamp: {}", chrono::Utc::now().to_rfc3339());
 

@@ -1,10 +1,10 @@
 use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
+use futures::future::join_all;
 use std::collections::{HashMap, HashSet};
 use std::future::ready;
 use std::sync::Arc;
-use futures::future::join_all;
 use tokio::task::JoinSet;
 
 /// Compiled, immutable workflow graph ready for execution.
@@ -272,7 +272,7 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
         let max_steps = self.max_steps;
 
         loop {
-            if step_count>= max_steps {
+            if step_count >= max_steps {
                 break;
             }
             step_count = step_count + 1;
@@ -425,13 +425,16 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
         nodes: Vec<&Box<dyn AgentNode<S>>>,
         state: Arc<S>,
     ) -> Result<(), LangGraphError> {
-        let futures: Vec<_> = nodes.into_iter().map(|node| {
-            let state_clone = Arc::clone(&state);
-            async move { node.apply(state_clone).await }
-        }).collect();
+        let futures: Vec<_> = nodes
+            .into_iter()
+            .map(|node| {
+                let state_clone = Arc::clone(&state);
+                async move { node.apply(state_clone).await }
+            })
+            .collect();
         let results = join_all(futures).await;
         for result in results {
-            result?;  // Return first error immediately
+            result?; // Return first error immediately
         }
         Ok(())
     }
