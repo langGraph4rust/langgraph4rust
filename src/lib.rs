@@ -19,6 +19,7 @@
 //! use langgraph4rust::*;
 //! use std::collections::HashSet;
 //! use std::sync::Arc;
+//! use async_trait::async_trait;
 //!
 //! // Define a custom node
 //! #[derive(Clone)]
