@@ -27,7 +27,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-langgraph4rust = "0.1.0"
+langgraph4rust = "0.1.1"
 tokio = { version = "1", features = ["full"] }
 ```
 
