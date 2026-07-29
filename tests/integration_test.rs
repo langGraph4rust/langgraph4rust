@@ -1314,3 +1314,154 @@ async fn test_parallel_execution_error_handling() -> Result<(), LangGraphError> 
     
     Ok(())
 }
+
+/// 测试场景：静态边和条件边同时存在
+/// 验证同一节点同时添加静态边和条件边时编译会报错
+#[tokio::test]
+async fn test_static_and_conditional_edges_conflict() {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    
+    // 添加静态边
+    builder.add_edge("__start__", HashSet::from(["node".to_string()]));
+    // 同时添加条件边（应该冲突）
+    builder.add_conditional_edge("__start__", vec![Box::new(|_state| "node".to_string())]);
+    
+    builder.add_edge("node", HashSet::from(["__end__".to_string()]));
+    
+    let result = builder.compile();
+    
+    // 编译时应该报错：不能同时有静态边和条件边
+    assert!(matches!(result, Err(LangGraphError::GraphError(msg)) if msg.contains("cannot have both")),
+            "Should fail when node has both static and conditional edges");
+}
+
+/// 测试场景：条件边返回 __end__ 节点
+/// 验证条件边直接返回结束节点时能正常终止工作流
+#[tokio::test]
+async fn test_conditional_edge_returns_end() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("decide", Box::new(CounterNode));
+    
+    // 条件边直接返回 __end__
+    builder.add_conditional_edge("__start__", vec![Box::new(|_state| "__end__".to_string())]);
+    
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    graph.invoke(state.clone()).await?;
+    
+    // decide 节点应该执行一次
+    let count: i32 = state.get("count").await?.unwrap();
+    assert_eq!(count, 1, "Decision node should execute once");
+    
+    Ok(())
+}
+
+/// 测试场景：多个条件边返回相同节点
+/// 验证HashSet自动去重，节点不会重复执行
+#[tokio::test]
+async fn test_multiple_conditional_edges_same_target() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("target", Box::new(CounterNode));
+    
+    // 多个条件路由器都返回同一个节点
+    builder.add_conditional_edge("__start__", vec![
+        Box::new(|_state| "target".to_string()),
+        Box::new(|_state| "target".to_string()),
+        Box::new(|_state| "target".to_string()),
+    ]);
+    
+    builder.add_edge("target", HashSet::from(["__end__".to_string()]));
+    
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    graph.invoke(state.clone()).await?;
+    
+    // 由于HashSet去重，target只执行一次
+    let count: i32 = state.get("count").await?.unwrap();
+    assert_eq!(count, 1, "Target should execute only once due to deduplication");
+    
+    Ok(())
+}
+
+/// 测试场景：add_conditional_edge 覆盖行为
+/// 验证多次调用 add_conditional_edge 会覆盖之前的设置
+#[tokio::test]
+async fn test_conditional_edge_overwrite() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node1", Box::new(CounterNode));
+    builder.add_node("node2", Box::new(CounterNode));
+    
+    // 第一次添加条件边：返回 node1
+    builder.add_conditional_edge("__start__", vec![Box::new(|_state| "node1".to_string())]);
+    // 第二次添加：覆盖为返回 node2
+    builder.add_conditional_edge("__start__", vec![Box::new(|_state| "node2".to_string())]);
+    
+    builder.add_edge("node1", HashSet::from(["__end__".to_string()]));
+    builder.add_edge("node2", HashSet::from(["__end__".to_string()]));
+    
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    graph.invoke(state.clone()).await?;
+    
+    // 只有 node2 执行（被覆盖后的结果）
+    let count: i32 = state.get("count").await?.unwrap();
+    assert_eq!(count, 1, "Only node2 should execute after overwrite");
+    
+    Ok(())
+}
+
+/// 测试场景：边的目标包含重复节点
+/// 静态边的目标集合中有重复值时的去重行为
+#[tokio::test]
+async fn test_static_edge_duplicate_targets() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("target", Box::new(CounterNode));
+    
+    // 静态边目标包含重复的节点名称
+    builder.add_edge("__start__", HashSet::from([
+        "target".to_string(),
+        "target".to_string(),  // 重复
+        "target".to_string(),  // 重复
+    ]));
+    
+    builder.add_edge("target", HashSet::from(["__end__".to_string()]));
+    
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    graph.invoke(state.clone()).await?;
+    
+    // HashSet自动去重，target只执行一次
+    let count: i32 = state.get("count").await?.unwrap();
+    assert_eq!(count, 1, "Target should execute only once");
+    
+    Ok(())
+}
+
+/// 测试场景：循环引用到起始节点
+/// 验证边指向 __start__ 时是否会形成无限循环
+#[tokio::test]
+async fn test_edge_back_to_start() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("loop", Box::new(CounterNode));
+    
+    builder.add_edge("__start__", HashSet::from(["loop".to_string()]));
+    builder.add_edge("loop", HashSet::from(["__start__".to_string()])); // 回到起点
+    
+    builder.set_max_steps(5);
+    
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    graph.invoke(state.clone()).await?;
+    
+    // 循环执行 max_steps-1 次（因为 start 不执行）
+    let count: i32 = state.get("count").await?.unwrap();
+    assert_eq!(count, 4, "Loop node should execute 4 times (max_steps - 1)");
+    
+    Ok(())
+}
