@@ -2046,23 +2046,24 @@ async fn test_vec_state_management() -> Result<(), LangGraphError> {
 async fn test_conditional_router_panic() {
     let mut builder = StateGraphBuilder::new();
     builder.add_node("node", Box::new(CounterNode));
-    
+
     // router 会panic
     builder.add_conditional_edge("__start__", vec![
         Box::new(|_state| {
             panic!("Intentional panic in router");
         }),
     ]);
-    
+
     let graph = builder.compile().unwrap();
     let state = Arc::new(DefaultMemoryState::new());
-    
+
+    // 在 tokio 异步上下文中捕获 panic
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        futures::executor::block_on(async {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
             graph.invoke(state).await
         })
     }));
-    
+
     // 应该捕获到panic
     assert!(result.is_err(), "Panic in conditional router should propagate");
 }
