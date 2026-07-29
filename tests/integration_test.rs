@@ -1443,7 +1443,7 @@ async fn test_static_edge_duplicate_targets() -> Result<(), LangGraphError> {
 }
 
 /// 测试场景：循环引用到起始节点
-/// 验证边指向 __start__ 时是否会形成无限循环
+/// 验证边指向 __start__ 时的循环行为
 #[tokio::test]
 async fn test_edge_back_to_start() -> Result<(), LangGraphError> {
     let mut builder = StateGraphBuilder::new();
@@ -1459,9 +1459,14 @@ async fn test_edge_back_to_start() -> Result<(), LangGraphError> {
     
     graph.invoke(state.clone()).await?;
     
-    // 循环执行 max_steps-1 次（因为 start 不执行）
+    // 执行流程分析：
+    // step 1: current={__start__} -> 跳过(start) -> next={loop}
+    // step 2: current={loop} -> 执行(count=1) -> next={__start__}
+    // step 3: current={__start__} -> 跳过(start) -> next={loop}
+    // step 4: current={loop} -> 执行(count=2) -> next={__start__}
+    // step 5: current={__start__} -> step_count(5) >= max_steps(5) -> break
     let count: i32 = state.get("count").await?.unwrap();
-    assert_eq!(count, 4, "Loop node should execute 4 times (max_steps - 1)");
+    assert_eq!(count, 2, "Loop executes floor((max_steps-1)/2) times when cycling back to start");
     
     Ok(())
 }
