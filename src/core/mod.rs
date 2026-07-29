@@ -1,5 +1,6 @@
 pub(crate) mod agent_node;
 pub(crate) mod agent_state;
+pub(crate) mod state_graph_builder;
 pub(crate) mod error;
 pub(crate) mod graph_validator;
 pub mod state_graph;
