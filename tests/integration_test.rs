@@ -1470,3 +1470,283 @@ async fn test_edge_back_to_start() -> Result<(), LangGraphError> {
     
     Ok(())
 }
+
+/// 测试场景：状态类型不匹配
+/// 验证先写入一种类型，再尝试读取另一种类型时的行为
+#[tokio::test]
+async fn test_state_type_mismatch() {
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    // 写入 i32 类型
+    let set_result = state.set("value", 42i32).await;
+    assert!(set_result.is_ok(), "Should successfully set i32 value");
+    
+    // 尝试读取为 String 类型（类型不匹配）
+    let get_result: Result<Option<String>, LangGraphError> = state.get("value").await;
+    
+    // 应该返回反序列化错误
+    assert!(get_result.is_err(), "Should fail when reading as different type");
+    assert!(matches!(get_result, Err(LangGraphError::StateError(msg)) if msg.contains("Deserialization error")),
+            "Should return deserialization error for type mismatch");
+}
+
+/// 测试场景：状态键包含特殊字符
+/// 验证使用特殊字符作为状态键时是否正常工作
+#[tokio::test]
+async fn test_state_special_key_characters() -> Result<(), LangGraphError> {
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    let special_keys = vec![
+        "key with spaces",
+        "key-with-dashes",
+        "key.with.dots",
+        "key/with/slashes",
+        "key\\with\\backslashes",
+        "key\nwith\nnewlines",
+        "key\twith\ttabs",
+        "中文键名",
+        "emoji🔑",
+        "",
+    ];
+    
+    for (i, key) in special_keys.iter().enumerate() {
+        state.set(key, i as i32).await?;
+        let retrieved: Option<i32> = state.get(key).await?;
+        assert_eq!(retrieved, Some(i as i32), "Failed for key: {:?}", key);
+    }
+    
+    Ok(())
+}
+
+/// 测试场景：静态边目标为空字符串
+/// 验证边的目标集合中包含空字符串时是否会被过滤
+#[tokio::test]
+async fn test_static_edge_empty_target() {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    
+    // 边的目标包含空字符串
+    builder.add_edge("__start__", HashSet::from(["".to_string(), "node".to_string()]));
+    builder.add_edge("node", HashSet::from(["__end__".to_string()]));
+    
+    let result = builder.compile();
+    
+    // 编译时应该报错：空字符串不是有效的节点
+    assert!(result.is_err(), "Empty string in edge targets should fail compilation");
+}
+
+/// 测试场景：节点名称非常长
+/// 验证使用超长节点名称时是否正常工作
+#[tokio::test]
+async fn test_very_long_node_name() -> Result<(), LangGraphError> {
+    let long_name = "a".repeat(10000);
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node(&long_name, Box::new(CounterNode));
+    builder.add_edge("__start__", HashSet::from([long_name.clone()]));
+    builder.add_edge(&long_name, HashSet::from(["__end__".to_string()]));
+    
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    graph.invoke(state.clone()).await?;
+    
+    let count: i32 = state.get("count").await?.unwrap();
+    assert_eq!(count, 1, "Long node name should work fine");
+    
+    Ok(())
+}
+
+/// 测试场景：同一节点出现在多个位置
+/// 验证同一个节点被多个边引用时是否只执行一次（在同一轮）
+#[tokio::test]
+async fn test_node_referenced_by_multiple_edges() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("shared", Box::new(CounterNode));
+    builder.add_node("source1", Box::new(CounterNode));
+    builder.add_node("source2", Box::new(CounterNode));
+    
+    builder.add_edge("__start__", HashSet::from(["source1".to_string(), "source2".to_string()]));
+    builder.add_edge("source1", HashSet::from(["shared".to_string()]));
+    builder.add_edge("source2", HashSet::from(["shared".to_string()]));
+    builder.add_edge("shared", HashSet::from(["__end__".to_string()]));
+    
+    let graph = builder.compile()?;
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    graph.invoke(state.clone()).await?;
+    
+    // source1 和 source2 各执行1次，shared 只执行1次（HashSet去重）
+    let count: i32 = state.get("count").await?.unwrap();
+    assert_eq!(count, 3, "source1 + source2 + shared = 3 executions");
+    
+    Ok(())
+}
+
+/// 测试场景：状态覆盖频率测试
+/// 频繁设置和获取同一个键，验证一致性
+#[tokio::test]
+async fn test_state_rapid_set_get() -> Result<(), LangGraphError> {
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    for i in 0..1000 {
+        state.set("rapid_key", i).await?;
+        let value: Option<i32> = state.get("rapid_key").await?;
+        assert_eq!(value, Some(i), "Value mismatch at iteration {}", i);
+    }
+    
+    Ok(())
+}
+
+/// 测试场景：大量不同的状态键
+/// 验证状态存储能处理大量不同的键
+#[tokio::test]
+async fn test_large_number_of_state_keys() -> Result<(), LangGraphError> {
+    let state = Arc::new(DefaultMemoryState::new());
+    
+    const NUM_KEYS: usize = 10000;
+    
+    for i in 0..NUM_KEYS {
+        let key = format!("key_{}", i);
+        state.set(&key, i).await?;
+    }
+    
+    for i in 0..NUM_KEYS {
+        let key = format!("key_{}", i);
+        let value: Option<usize> = state.get(&key).await?;
+        assert_eq!(value, Some(i), "Mismatch for key {}", i);
+    }
+    
+    Ok(())
+}
+
+/// 测试场景：复杂嵌套数据结构作为状态值
+/// 验证序列化/反序列化复杂嵌套结构的能力
+#[tokio::test]
+async fn test_complex_nested_data_structure() -> Result<(), LangGraphError> {
+    use serde::{Serialize, Deserialize};
+    
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    struct NestedData {
+        name: String,
+        values: Vec<i32>,
+        metadata: std::collections::HashMap<String, String>,
+        optional: Option<f64>,
+    }
+    
+    let data = NestedData {
+        name: "test".to_string(),
+        values: vec![1, 2, 3, 4, 5],
+        metadata: {
+            let mut map = std::collections::HashMap::new();
+            map.insert("key1".to_string(), "value1".to_string());
+            map.insert("key2".to_string(), "value2".to_string());
+            map
+        },
+        optional: Some(3.14),
+    };
+    
+    let state = Arc::new(DefaultMemoryState::new());
+    state.set("nested", &data).await?;
+    
+    let retrieved: Option<NestedData> = state.get("nested").await?;
+    assert_eq!(retrieved, Some(data), "Complex nested structure should round-trip correctly");
+    
+    Ok(())
+}
+
+/// 测试场景：图编译后不可修改
+/// 验证 StateGraph 是真正不可变的
+#[tokio::test]
+async fn test_graph_immutability_after_compile() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    builder.add_edge("__start__", HashSet::from(["node".to_string()]));
+    builder.add_edge("node", HashSet::from(["__end__".to_string()]));
+    
+    let graph = builder.compile()?;
+    
+    // 多次调用 invoke 应该产生相同结果
+    let state1 = Arc::new(DefaultMemoryState::new());
+    let state2 = Arc::new(DefaultMemoryState::new());
+    
+    graph.invoke(state1.clone()).await?;
+    graph.invoke(state2.clone()).await?;
+    
+    let count1: i32 = state1.get("count").await?.unwrap();
+    let count2: i32 = state2.get("count").await?.unwrap();
+    
+    assert_eq!(count1, count2, "Multiple invocations should produce same result");
+    
+    Ok(())
+}
+
+/// 测试场景：空的条件边路由器列表
+/// 验证传入空的 router 列表时的行为
+#[tokio::test]
+async fn test_empty_conditional_router_list() {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("node", Box::new(CounterNode));
+    
+    // 空的 router 列表
+    builder.add_conditional_edge("__start__", vec![]);
+    
+    let result = builder.compile();
+    
+    // 应该可以编译，但执行时会因为没有出边而失败
+    assert!(result.is_ok(), "Empty router list should compile");
+    
+    let graph = result.unwrap();
+    let state = Arc::new(DefaultMemoryState::new());
+    let exec_result = graph.invoke(state).await;
+    
+    // 执行时应该返回 Dead-end 错误（没有下一个节点）
+    assert!(matches!(exec_result, Err(LangGraphError::GraphError(msg)) if msg.contains("Dead-end")),
+            "Should return Dead-end error when no routers produce output");
+}
+
+/// 测试场景：条件边根据状态动态路由
+/// 验证条件边能够根据状态内容做出不同的路由决策
+#[tokio::test]
+async fn test_conditional_routing_based_on_state() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("route_a", Box::new(CounterNode));
+    builder.add_node("route_b", Box::new(MessageNode { message: "B".to_string() }));
+    
+    // 根据状态中的 choice 值决定路由
+    builder.add_conditional_edge("__start__", vec![
+        Box::new(|state| {
+            let choice: Option<String> = futures::executor::block_on(async {
+                state.get("choice").await.unwrap_or(None)
+            });
+            match choice.as_deref() {
+                Some("A") => "route_a".to_string(),
+                _ => "route_b".to_string(),
+            }
+        }),
+    ]);
+    
+    builder.add_edge("route_a", HashSet::from(["__end__".to_string()]));
+    builder.add_edge("route_b", HashSet::from(["__end__".to_string()]));
+    
+    let graph = builder.compile()?;
+    
+    // 测试选择 A
+    let state_a = Arc::new(DefaultMemoryState::new());
+    state_a.set("choice", "A").await?;
+    graph.invoke(state_a.clone()).await?;
+    let count_a: i32 = state_a.get("count").await?.unwrap();
+    let msg_a: Option<String> = state_a.get("message").await?;
+    assert_eq!(count_a, 1, "Route A should execute");
+    assert!(msg_a.is_none(), "Route B should not execute");
+    
+    // 测试选择 B
+    let state_b = Arc::new(DefaultMemoryState::new());
+    state_b.set("choice", "B").await?;
+    graph.invoke(state_b.clone()).await?;
+    let count_b: Option<i32> = state_b.get("count").await?;
+    let msg_b: Option<String> = state_b.get("message").await?;
+    assert!(count_b.is_none(), "Route A should not execute");
+    assert_eq!(msg_b, Some("B".to_string()), "Route B should execute");
+    
+    Ok(())
+}
