@@ -95,20 +95,23 @@ pub trait AgentState {
     /// # Example
     ///
     /// ```rust
-    /// # use langgraph4rust::*;
-    /// # use std::sync::Arc;
-    /// # tokio_test::block_on(async {
-    /// # let state = Arc::new(DefaultMemoryState::new());
-    /// // Get a string value
-    /// let name: Option<String> = state.get("user_name").await?;
+    /// use langgraph4rust::*;
+    /// use std::sync::Arc;
     ///
-    /// // Get an integer value
-    /// let count: Option<i32> = state.get("counter").await?;
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), LangGraphError> {
+    ///     let state = Arc::new(DefaultMemoryState::new());
     ///
-    /// // Get a complex type (must implement Deserialize)
-    /// let data: Option<Vec<String>> = state.get("items").await?;
-    /// # Ok::<(), LangGraphError>(())
-    /// # });
+    ///     // Get a string value
+    ///     let name: Option<String> = state.get("user_name").await?;
+    ///
+    ///     // Get an integer value
+    ///     let count: Option<i32> = state.get("counter").await?;
+    ///
+    ///     // Get a complex type (must implement Deserialize)
+    ///     let data: Option<Vec<String>> = state.get("items").await?;
+    ///     Ok(())
+    /// }
     /// ```
     async fn get<T: DeserializeOwned + Send + Sync>(
         &self,
@@ -146,20 +149,24 @@ pub trait AgentState {
     /// # Example
     ///
     /// ```rust
-    /// # use langgraph4rust::*;
-    /// # use std::sync::Arc;
-    /// # tokio_test::block_on(async {
-    /// # let state = Arc::new(DefaultMemoryState::new());
-    /// // Store primitive types
-    /// state.set("name", "Alice").await?;
-    /// state.set("age", 30).await?;
-    /// state.set("active", true).await?;
+    /// use langgraph4rust::*;
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
     ///
-    /// // Store complex types
-    /// state.set("tags", vec!["rust", "workflow"]).await?;
-    /// state.set("metadata", HashMap::from([("version", "1.0")])).await?;
-    /// # Ok::<(), LangGraphError>(())
-    /// # });
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), LangGraphError> {
+    ///     let state = Arc::new(DefaultMemoryState::new());
+    ///
+    ///     // Store primitive types
+    ///     state.set("name", "Alice").await?;
+    ///     state.set("age", 30).await?;
+    ///     state.set("active", true).await?;
+    ///
+    ///     // Store complex types
+    ///     state.set("tags", vec!["rust", "workflow"]).await?;
+    ///     state.set("metadata", HashMap::from([("version", "1.0")])).await?;
+    ///     Ok(())
+    /// }
     /// ```
     async fn set<T: Serialize + Send + Sync>(
         &self,
@@ -205,6 +212,7 @@ pub trait AgentState {
 ///
 /// ```rust
 /// use langgraph4rust::*;
+/// use std::collections::HashMap;
 /// use std::sync::Arc;
 ///
 /// #[tokio::main]

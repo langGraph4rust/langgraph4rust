@@ -3,9 +3,7 @@ use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
 use futures::future::join_all;
 use std::collections::{HashMap, HashSet};
-use std::future::ready;
 use std::sync::Arc;
-use tokio::task::JoinSet;
 
 /// Compiled, immutable workflow graph ready for execution.
 ///
@@ -53,16 +51,32 @@ use tokio::task::JoinSet;
 /// use std::collections::HashSet;
 /// use std::sync::Arc;
 ///
-/// // Build and compile graph
-/// let mut builder = StateGraphBuilder::new();
-/// // ... add nodes and edges ...
-/// let graph = builder.compile()?;
+/// #[derive(Clone)]
+/// struct SimpleNode;
 ///
-/// // Execute multiple times with different states
-/// for i in 0..10 {
-///     let state = Arc::new(DefaultMemoryState::new());
-///     state.set("iteration", i).await?;
-///     graph.invoke(state).await?;
+/// #[async_trait]
+/// impl AgentNode<DefaultMemoryState> for SimpleNode {
+///     async fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+///         state.set("done", true).await?;
+///         Ok(())
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), LangGraphError> {
+///     let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
+///     builder.add_node("step", Box::new(SimpleNode));
+///     builder.add_edge(START_NODE, HashSet::from(["step".to_string()]));
+///     builder.add_edge("step", HashSet::from([END_NODE.to_string()]));
+///     let graph = builder.compile()?;
+///
+///     // Execute multiple times with different states
+///     for i in 0..10 {
+///         let state = Arc::new(DefaultMemoryState::new());
+///         state.set("iteration", i).await?;
+///         graph.invoke(state).await?;
+///     }
+///     Ok(())
 /// }
 /// ```
 ///
@@ -212,12 +226,27 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
     ///
     /// ```rust
     /// use langgraph4rust::*;
+    /// use std::collections::HashSet;
     /// use std::sync::Arc;
+    ///
+    /// #[derive(Clone)]
+    /// struct HelloNode;
+    ///
+    /// #[async_trait]
+    /// impl AgentNode<DefaultMemoryState> for HelloNode {
+    ///     async fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+    ///         let input: String = state.get("input").await?.unwrap_or_default();
+    ///         state.set("output", input.to_uppercase()).await?;
+    ///         Ok(())
+    ///     }
+    /// }
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), LangGraphError> {
-    ///     let mut builder = StateGraphBuilder::new();
-    ///     // ... configure graph ...
+    ///     let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
+    ///     builder.add_node("hello", Box::new(HelloNode));
+    ///     builder.add_edge(START_NODE, HashSet::from(["hello".to_string()]));
+    ///     builder.add_edge("hello", HashSet::from([END_NODE.to_string()]));
     ///     let graph = builder.compile()?;
     ///
     ///     let state = Arc::new(DefaultMemoryState::new());
@@ -233,22 +262,40 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
     /// # Example - Multiple Executions
     ///
     /// ```rust
-    /// # use langgraph4rust::*;
-    /// # use std::sync::Arc;
-    /// # tokio_test::block_on(async {
-    /// # let graph = /* compiled graph */;
-    /// // Reuse the same graph multiple times
-    /// for id in 0..5 {
-    ///     let state = Arc::new(DefaultMemoryState::new());
-    ///     state.set("request_id", id).await?;
+    /// use langgraph4rust::*;
+    /// use std::collections::HashSet;
+    /// use std::sync::Arc;
     ///
-    ///     match graph.invoke(state.clone()).await {
-    ///         Ok(()) => println!("Request {} succeeded", id),
-    ///         Err(e) => eprintln!("Request {} failed: {}", id, e),
+    /// #[derive(Clone)]
+    /// struct WorkNode;
+    ///
+    /// #[async_trait]
+    /// impl AgentNode<DefaultMemoryState> for WorkNode {
+    ///     async fn apply(&self, _state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+    ///         Ok(())
     ///     }
     /// }
-    /// # Ok::<(), LangGraphError>(())
-    /// # });
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), LangGraphError> {
+    ///     let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
+    ///     builder.add_node("work", Box::new(WorkNode));
+    ///     builder.add_edge(START_NODE, HashSet::from(["work".to_string()]));
+    ///     builder.add_edge("work", HashSet::from([END_NODE.to_string()]));
+    ///     let graph = builder.compile()?;
+    ///
+    ///     // Reuse the same graph multiple times
+    ///     for id in 0..5 {
+    ///         let state = Arc::new(DefaultMemoryState::new());
+    ///         state.set("request_id", id).await?;
+    ///
+    ///         match graph.invoke(state.clone()).await {
+    ///             Ok(()) => println!("Request {} succeeded", id),
+    ///             Err(e) => eprintln!("Request {} failed: {}", id, e),
+    ///         }
+    ///     }
+    ///     Ok(())
+    /// }
     /// ```
     ///
     /// # Performance Characteristics

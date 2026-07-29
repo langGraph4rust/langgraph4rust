@@ -173,7 +173,7 @@ async fn main() -> Result<(), LangGraphError> {
     // Add conditional edge from receiver based on priority
     builder.add_conditional_edge(
         "receive",
-        vec![Box::new(|state| {
+        vec![Box::new(|_state| {
             // Note: In conditional edges, we need to handle the async get differently
             // For this example, we'll use a simple pattern matching approach
             let priority = "normal"; // Default fallback

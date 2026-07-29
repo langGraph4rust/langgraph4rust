@@ -237,8 +237,8 @@ Contributions are welcome! Please feel free to submit Pull Requests.
 
 ```bash
 # Clone the repository
-git clone https://github.com/langGraph4rust/langgrap4rust.git
-cd langgrap4rust
+git clone https://github.com/langGraph4rust/langgraph4rust.git
+cd langgraph4rust
 
 # Build the project
 cargo build
@@ -269,8 +269,8 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ## 📞 Support
 
 - 📖 Check the [examples](examples/) for usage patterns
-- 🐛 Report issues via [GitHub Issues](https://github.com/langGraph4rust/langgrap4rust/issues)
-- 💬 Discussions welcome in [GitHub Discussions](https://github.com/langGraph4rust/langgrap4rust/discussions)
+- 🐛 Report issues via [GitHub Issues](https://github.com/langGraph4rust/langgraph4rust/issues)
+- 💬 Discussions welcome in [GitHub Discussions](https://github.com/langGraph4rust/langgraph4rust/discussions)
 
 ---
 

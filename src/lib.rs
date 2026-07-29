@@ -75,10 +75,11 @@
 //!
 //! ## License
 //!
-//! MIT License
+//! Apache License 2.0
 
 pub mod core;
 
+pub use async_trait::async_trait;
 pub use core::agent_node::AgentNode;
 pub use core::agent_state::{AgentState, DefaultMemoryState};
 pub use core::error::LangGraphError;

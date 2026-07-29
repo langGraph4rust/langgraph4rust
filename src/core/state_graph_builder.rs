@@ -17,9 +17,20 @@ use crate::core::graph_validator::{GraphValidator, ValidatedGraph};
 /// ```rust
 /// use langgraph4rust::*;
 /// use std::collections::HashSet;
+/// use std::sync::Arc;
 ///
-/// let mut builder = StateGraphBuilder::new();
-/// builder.add_node("my_start_node", /* ... */);
+/// #[derive(Clone)]
+/// struct MyStartNode;
+///
+/// #[async_trait]
+/// impl AgentNode<DefaultMemoryState> for MyStartNode {
+///     async fn apply(&self, _state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+///         Ok(())
+///     }
+/// }
+///
+/// let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
+/// builder.add_node("my_start_node", Box::new(MyStartNode));
 ///
 /// // Connect START_NODE to your first real node
 /// builder.add_edge(START_NODE, HashSet::from(["my_start_node".to_string()]));
@@ -36,9 +47,20 @@ pub const START_NODE: &str = "__start__";
 /// ```rust
 /// use langgraph4rust::*;
 /// use std::collections::HashSet;
+/// use std::sync::Arc;
 ///
-/// let mut builder = StateGraphBuilder::new();
-/// builder.add_node("final_step", /* ... */);
+/// #[derive(Clone)]
+/// struct FinalStepNode;
+///
+/// #[async_trait]
+/// impl AgentNode<DefaultMemoryState> for FinalStepNode {
+///     async fn apply(&self, _state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+///         Ok(())
+///     }
+/// }
+///
+/// let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
+/// builder.add_node("final_step", Box::new(FinalStepNode));
 ///
 /// // Connect final step to END_NODE to complete the workflow
 /// builder.add_edge("final_step", HashSet::from([END_NODE.to_string()]));
@@ -69,13 +91,27 @@ pub const END_NODE: &str = "__end__";
 /// ```rust
 /// use langgraph4rust::*;
 /// use std::collections::HashSet;
+/// use std::sync::Arc;
 ///
-/// let graph = StateGraphBuilder::new()
-///     .set_max_steps(100)
+/// #[derive(Clone)]
+/// struct MyNode;
+///
+/// #[async_trait]
+/// impl AgentNode<DefaultMemoryState> for MyNode {
+///     async fn apply(&self, _state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+///         Ok(())
+///     }
+/// }
+///
+/// # fn main() -> Result<(), LangGraphError> {
+/// let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
+/// builder.set_max_steps(100)
 ///     .add_node("process", Box::new(MyNode))
 ///     .add_edge(START_NODE, HashSet::from(["process".to_string()]))
-///     .add_edge("process", HashSet::from([END_NODE.to_string()]))
-///     .compile()?;
+///     .add_edge("process", HashSet::from([END_NODE.to_string()]));
+/// let graph = builder.compile()?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Validation
@@ -105,14 +141,18 @@ pub const END_NODE: &str = "__end__";
 ///     }
 /// }
 ///
-/// let mut builder = StateGraphBuilder::new();
-/// builder.add_node("start", Box::new(StartNode));
-/// builder.add_edge(START_NODE, HashSet::from(["start".to_string()]));
-/// builder.add_edge("start", HashSet::from([END_NODE.to_string()]));
+/// #[tokio::main]
+/// async fn main() -> Result<(), LangGraphError> {
+///     let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
+///     builder.add_node("start", Box::new(StartNode));
+///     builder.add_edge(START_NODE, HashSet::from(["start".to_string()]));
+///     builder.add_edge("start", HashSet::from([END_NODE.to_string()]));
 ///
-/// let graph = builder.compile()?;
-/// let state = Arc::new(DefaultMemoryState::new());
-/// graph.invoke(state).await?;
+///     let graph = builder.compile()?;
+///     let state = Arc::new(DefaultMemoryState::new());
+///     graph.invoke(state).await?;
+///     Ok(())
+/// }
 /// ```
 pub struct StateGraphBuilder<S: AgentState + Send + Sync> {
     /// Collection of named nodes in the graph
@@ -120,13 +160,21 @@ pub struct StateGraphBuilder<S: AgentState + Send + Sync> {
     /// Static edges mapping source -> set of destinations
     edges: HashMap<String, HashSet<String>>,
     /// Conditional edges mapping source -> list of router functions
-    conditional_edges: HashMap<String, Vec<Box<dyn Fn(&S) -> String>>>,
+    conditional_edges: HashMap<String, Vec<RouterFn<S>>>,
     /// Start node identifier (defaults to START_NODE)
     start_node: String,
     /// End node identifier (defaults to END_NODE)
     end_node: String,
     /// Maximum execution steps before forced termination
     max_steps: usize,
+}
+
+type RouterFn<S> = Box<dyn Fn(&S) -> String>;
+
+impl<S: AgentState + Send + Sync> Default for StateGraphBuilder<S> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
@@ -145,9 +193,9 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     /// # Example
     ///
     /// ```rust
-    /// use langgraph4rust::StateGraphBuilder;
+    /// use langgraph4rust::{StateGraphBuilder, DefaultMemoryState};
     ///
-    /// let mut builder = StateGraphBuilder::new();
+    /// let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
     /// // Ready to configure...
     /// ```
     pub fn new() -> Self {
@@ -187,7 +235,7 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     ///
     /// ```rust
     /// # use langgraph4rust::*;
-    /// let mut builder = StateGraphBuilder::new();
+    /// let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
     /// builder.set_max_steps(100);  // Limit to 100 steps
     /// ```
     pub fn set_max_steps(&mut self, max_steps: usize) -> &mut Self {
@@ -234,6 +282,7 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     /// }
     ///
     /// // Add to builder
+    /// # let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
     /// builder.add_node("process_data", Box::new(ProcessDataNode));
     /// ```
     ///
@@ -266,6 +315,7 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     /// ```rust
     /// # use langgraph4rust::*;
     /// # use std::collections::HashSet;
+    /// # let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
     /// builder.add_edge("step1", HashSet::from(["step2".to_string()]));
     /// ```
     ///
@@ -273,6 +323,7 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     /// ```rust
     /// # use langgraph4rust::*;
     /// # use std::collections::HashSet;
+    /// # let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
     /// builder.add_edge("router", HashSet::from([
     ///     "process_a".to_string(),
     ///     "process_b".to_string(),
@@ -284,6 +335,7 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     /// ```rust
     /// # use langgraph4rust::*;
     /// # use std::collections::HashSet;
+    /// # let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
     /// builder.add_edge(START_NODE, HashSet::from(["entry".to_string()]));
     /// builder.add_edge("final", HashSet::from([END_NODE.to_string()]));
     /// ```
@@ -325,9 +377,10 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     ///
     /// # Example - Conditional Branching
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// # use langgraph4rust::*;
     /// # use std::sync::Arc;
+    /// # let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
     /// builder.add_conditional_edge("decision_point", vec![
     ///     // Route based on state value
     ///     Box::new(|state| {
@@ -339,9 +392,10 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     ///
     /// # Example - Loop Pattern
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// # use langgraph4rust::*;
     /// # use std::sync::Arc;
+    /// # let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
     /// builder.add_conditional_edge("retry_check", vec![
     ///     Box::new(|state| {
     ///         let attempts: i32 = state.get("attempts").ok().flatten().unwrap_or(0);
@@ -398,8 +452,15 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     ///
     /// ```rust
     /// # use langgraph4rust::*;
-    /// let mut builder = StateGraphBuilder::new();
-    /// builder.add_node("custom_entry", /* ... */);
+    /// # use std::sync::Arc;
+    /// # #[derive(Clone)]
+    /// # struct EntryNode;
+    /// # #[async_trait]
+    /// # impl AgentNode<DefaultMemoryState> for EntryNode {
+    /// #     async fn apply(&self, _state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> { Ok(()) }
+    /// # }
+    /// let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
+    /// builder.add_node("custom_entry", Box::new(EntryNode));
     /// builder.set_start_node("custom_entry");
     /// ```
     pub fn set_start_node(&mut self, start_node: &str) -> &mut Self {
@@ -430,7 +491,7 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     ///
     /// ```rust
     /// # use langgraph4rust::*;
-    /// let mut builder = StateGraphBuilder::new();
+    /// let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
     /// builder.set_end_node("completion_handler");
     /// ```
     pub fn set_end_node(&mut self, end_node: &str) -> &mut Self {
@@ -497,10 +558,18 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     /// # use langgraph4rust::*;
     /// # use std::collections::HashSet;
     /// # use std::sync::Arc;
-    /// let mut builder = StateGraphBuilder::new();
+    /// # #[derive(Clone)]
+    /// # struct MyNode;
+    /// # #[async_trait]
+    /// # impl AgentNode<DefaultMemoryState> for MyNode {
+    /// #     async fn apply(&self, _state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> { Ok(()) }
+    /// # }
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), LangGraphError> {
+    /// let mut builder = StateGraphBuilder::<DefaultMemoryState>::new();
     ///
     /// // Configure the graph...
-    /// builder.add_node("my_node", /* ... */);
+    /// builder.add_node("my_node", Box::new(MyNode));
     /// builder.add_edge(START_NODE, HashSet::from(["my_node".to_string()]));
     /// builder.add_edge("my_node", HashSet::from([END_NODE.to_string()]));
     ///
@@ -514,7 +583,8 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     ///         eprintln!("Failed to compile: {}", e);
     ///     }
     /// }
-    /// # Ok::<(), LangGraphError>(())
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Performance

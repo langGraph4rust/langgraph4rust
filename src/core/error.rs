@@ -69,7 +69,9 @@ pub enum LangGraphError {
     ///
     /// ```rust
     /// # use langgraph4rust::LangGraphError;
+    /// # fn example() -> Result<(), LangGraphError> {
     /// return Err(LangGraphError::NodeError("Database connection failed".to_string()));
+    /// # }
     /// ```
     NodeError(String),
 
@@ -89,9 +91,11 @@ pub enum LangGraphError {
     ///
     /// ```rust
     /// # use langgraph4rust::LangGraphError;
+    /// # fn example() -> Result<(), LangGraphError> {
     /// return Err(LangGraphError::StateError(
     ///     "Cannot deserialize 'hello' as i32".to_string()
     /// ));
+    /// # }
     /// ```
     StateError(String),
 
@@ -112,9 +116,11 @@ pub enum LangGraphError {
     ///
     /// ```rust
     /// # use langgraph4rust::LangGraphError;
+    /// # fn example() -> Result<(), LangGraphError> {
     /// return Err(LangGraphError::GraphError(
     ///     "Node 'processor' has no outgoing edges".to_string()
     /// ));
+    /// # }
     /// ```
     GraphError(String),
 
@@ -133,9 +139,11 @@ pub enum LangGraphError {
     ///
     /// ```rust
     /// # use langgraph4rust::LangGraphError;
+    /// # fn example() -> Result<(), LangGraphError> {
     /// return Err(LangGraphError::NotFound(
     ///     "Node 'missing_node' not found in graph".to_string()
     /// ));
+    /// # }
     /// ```
     NotFound(String),
 
@@ -152,9 +160,11 @@ pub enum LangGraphError {
     ///
     /// ```rust
     /// # use langgraph4rust::LangGraphError;
+    /// # fn example() -> Result<(), LangGraphError> {
     /// return Err(LangGraphError::Timeout(
     ///     "Node 'slow_api' exceeded 30s limit".to_string()
     /// ));
+    /// # }
     /// ```
     Timeout(String),
 
@@ -171,9 +181,11 @@ pub enum LangGraphError {
     ///
     /// ```rust
     /// # use langgraph4rust::LangGraphError;
+    /// # fn example() -> Result<(), LangGraphError> {
     /// return Err(LangGraphError::RetryExhausted(
     ///     "Failed after 3 attempts: API rate limited".to_string()
     /// ));
+    /// # }
     /// ```
     RetryExhausted(String),
 }

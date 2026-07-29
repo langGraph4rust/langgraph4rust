@@ -2,22 +2,21 @@
 name = "langgraph4rust"
 version = "0.1.0"
 edition = "2024"
-authors = ["Your Name <your.email@example.com>"]
+rust-version = "1.85"
+authors = ["langgraph4rust <429608827@qq.com>"]
 license = "Apache-2.0"
 description = "A powerful Rust implementation of a stateful workflow engine inspired by Python's LangGraph"
-repository = "https://github.com/langGraph4rust/langgrap4rust"
+repository = "https://github.com/langGraph4rust/langgraph4rust"
 keywords = ["workflow", "graph", "state-machine", "async", "langgraph"]
 categories = ["asynchronous", "data-structures", "development-tools"]
 readme = "README.md"
 documentation = "https://docs.rs/langgraph4rust"
-homepage = "https://github.com/langGraph4rust/langgrap4rust#readme"
+homepage = "https://github.com/langGraph4rust/langgraph4rust#readme"
 exclude = [
     ".gitignore",
     ".github/",
+    ".idea/",
     "target/",
-    "*.lock",
-    "examples/",
-    "tests/",
 ]
 
 [dependencies]
