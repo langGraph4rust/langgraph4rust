@@ -55,7 +55,7 @@ use std::fmt::Display;
 pub enum LangGraphError {
     /// Error occurred during node execution.
     ///
-    /// This is returned when a node's [`AgentNode::apply`] method returns an error,
+    /// This is returned when a node's [`AgentNode::apply`](crate::AgentNode::apply) method returns an error,
     /// or when the engine encounters issues executing a node (e.g., panic recovery).
     ///
     /// # Common Causes
@@ -101,7 +101,7 @@ pub enum LangGraphError {
 
     /// Error in graph structure or validation.
     ///
-    /// Returned during graph construction ([`StateGraphBuilder::compile`]) when
+    /// Returned during graph construction ([`StateGraphBuilder::compile`](crate::StateGraphBuilder::compile)) when
     /// the graph definition violates structural constraints.
     ///
     /// # Common Causes

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 /// Compiled, immutable workflow graph ready for execution.
 ///
-/// This is the output of [`StateGraphBuilder::compile()`] and represents a fully
+/// This is the output of [`StateGraphBuilder::compile()`](crate::StateGraphBuilder::compile) and represents a fully
 /// validated workflow that can be executed multiple times with different states.
 /// The graph is immutable after compilation, ensuring thread-safe concurrent usage.
 ///
@@ -18,8 +18,8 @@ use std::sync::Arc;
 ///
 /// # Lifecycle
 ///
-/// 1. **Build**: Create via [`StateGraphBuilder`]
-/// 2. **Compile**: Call [`compile()`](StateGraphBuilder::compile) → produces `StateGraph`
+/// 1. **Build**: Create via [`StateGraphBuilder`](crate::StateGraphBuilder)
+/// 2. **Compile**: Call [`compile()`](crate::StateGraphBuilder::compile) → produces `StateGraph`
 /// 3. **Execute**: Call [`invoke()`](StateGraph::invoke) one or more times
 /// 4. **Reuse**: Same graph can execute multiple workflows safely
 ///
