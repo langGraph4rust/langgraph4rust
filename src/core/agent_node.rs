@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 /// Trait for defining executable nodes in a workflow graph.
 ///
-/// Implement this trait to create custom nodes that can be added to a [`StateGraphBuilder`].
+/// Implement this trait to create custom nodes that can be added to a [`StateGraphBuilder`](crate::StateGraphBuilder).
 /// Each node represents a discrete unit of work in your workflow and has access to
 /// the shared state.
 ///
