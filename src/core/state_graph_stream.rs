@@ -1,3 +1,62 @@
+//! Real-time, push-based event streaming for graph execution.
+//!
+//! This module implements [`StateGraph::stream`], an alternative to
+//! [`StateGraph::invoke`] that observes a workflow *while it runs* instead of
+//! only receiving the final result. It mirrors the queue-based streaming model
+//! of Python's LangGraph.
+//!
+//! # Architecture
+//!
+//! ```text
+//!   tokio::spawn ──> run_driver ──> bounded mpsc channel ──> ReceiverStream ──> consumer
+//!        (background task)            (capacity 32)          (Stream impl)
+//! ```
+//!
+//! - [`StateGraph::stream`] spawns a **background driver task** ([`run_driver`])
+//!   and immediately returns a [`ReceiverStream`] wrapping the channel receiver.
+//! - The driver pushes [`StreamEvent`]s into a **bounded** channel; when the
+//!   consumer is slow, the driver awaits `send`, providing natural backpressure
+//!   instead of unbounded buffering.
+//! - Nodes within a step run as **concurrent futures** ([`batch_apply_with_events`]
+//!   + [`join_all`]); each future emits its own [`StreamEvent::NodeStarted`] /
+//!   [`StreamEvent::NodeFinished`] at the real moment it starts and finishes, so
+//!   events interleave in true execution order and `elapsed` is per-node.
+//!
+//! # Event lifecycle
+//!
+//! ```text
+//! WorkflowStarted
+//!   ├─ StepStarted { step, nodes }
+//!   ├─ NodeStarted { step, name }      ┐ repeated per node,
+//!   ├─ NodeFinished { step, name, .. } ┘ possibly interleaved
+//!   ├─ RoutingDecision { step, from_nodes, to_nodes }
+//!   └─ ... (next step) ...
+//! WorkflowFinished { .. }   ── or ──   WorkflowError { .. }
+//! ```
+//!
+//! The stream always terminates with exactly one of [`StreamEvent::WorkflowFinished`]
+//! (success) or [`StreamEvent::WorkflowError`] (failure) as its final item.
+//!
+//! # Execution model & step indexing
+//!
+//! - The virtual [`__start__`](crate::START_NODE) node occupies **step 1** and emits
+//!   only a [`StreamEvent::RoutingDecision`] (no `StepStarted` / node events);
+//!   real nodes begin at **step 2**.
+//! - For a linear graph with `N` real nodes (`start → N nodes → end`): total
+//!   events = `3 + 4N` and [`WorkflowFinished.total_steps`](StreamEvent::WorkflowFinished) = `N + 2`
+//!   (the extra two are the `__start__` routing step and the `__end__` detection step).
+//! - If the step budget ([`max_steps`](crate::StateGraphBuilder::set_max_steps)) is
+//!   exhausted before reaching the end node (e.g. a cycle), the stream emits a
+//!   [`StreamEvent::WorkflowError`] wrapping [`LangGraphError::GraphError`] rather
+//!   than reporting success.
+//!
+//! # Error semantics
+//!
+//! Errors are **delivered as events**, not returned: a node failure, a dead-end,
+//! or an exhausted step budget produces a terminal [`StreamEvent::WorkflowError`],
+//! keeping the stream's item type uniform. A dropped receiver simply stops the
+//! driver early (all sends tolerate a closed channel).
+
 use crate::core::state_graph::StateGraph;
 use crate::{AgentNode, AgentState, LangGraphError};
 use futures::future::join_all;

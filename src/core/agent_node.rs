@@ -1,3 +1,15 @@
+//! The node abstraction: units of work within a workflow.
+//!
+//! This module defines the [`AgentNode`] trait, the fundamental extension point
+//! of the engine. Each node encapsulates a discrete piece of logic that reads
+//! from and writes to the shared [`AgentState`]. Nodes are registered on a
+//! [`StateGraphBuilder`](crate::StateGraphBuilder) and invoked by the execution
+//! engine — either in batch ([`StateGraph::invoke`](crate::StateGraph::invoke))
+//! or streamed ([`StateGraph::stream`](crate::StateGraph::stream)).
+//!
+//! Nodes at the same step may run **concurrently**, so implementations must be
+//! thread-safe (`Send + Sync`).
+
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
 use async_trait::async_trait;

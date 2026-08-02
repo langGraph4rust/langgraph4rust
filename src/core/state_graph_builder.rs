@@ -1,3 +1,31 @@
+//! Declarative, validated construction of workflow graphs.
+//!
+//! This module provides [`StateGraphBuilder`], the entry point for defining a
+//! workflow. The builder exposes a fluent API for registering nodes and edges,
+//! then [`compile`](StateGraphBuilder::compile)s the definition into an
+//! immutable [`StateGraph`] after running comprehensive structural validation.
+//!
+//! # Virtual boundary nodes
+//!
+//! - [`START_NODE`] (`__start__`) — the implicit entry point; add edges *from*
+//!   it to your real starting nodes.
+//! - [`END_NODE`] (`__end__`) — the implicit terminator; add edges *to* it from
+//!   your final nodes.
+//!
+//! # Edge types
+//!
+//! - **Static** ([`add_edge`](StateGraphBuilder::add_edge)) — deterministic,
+//!   fixed targets.
+//! - **Conditional** ([`add_conditional_edge`](StateGraphBuilder::add_conditional_edge))
+//!   — synchronous router closures that pick the next node(s) from the runtime
+//!   state. A node may use **either** static or conditional edges, not both.
+//!
+//! # Validation
+//!
+//! [`compile`](StateGraphBuilder::compile) consumes the builder and verifies the
+//! topology (see its documentation for the full rule list), guaranteeing that a
+//! successfully compiled graph is structurally sound before any execution.
+
 use std::collections::{HashMap, HashSet};
 
 use super::state_graph::StateGraph;

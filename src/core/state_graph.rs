@@ -1,3 +1,29 @@
+//! Compiled graph representation and batch execution.
+//!
+//! This module defines [`StateGraph`], the immutable artifact produced by
+//! [`StateGraphBuilder::compile`](crate::StateGraphBuilder::compile). A compiled
+//! graph has passed all structural validation and can be executed repeatedly,
+//! from multiple tasks, with different states.
+//!
+//! # Two execution modes
+//!
+//! - **Batch** — [`StateGraph::invoke`] runs the workflow to completion and
+//!   returns once the end node is reached (or an error occurs). The streaming
+//!   counterpart lives in the [`state_graph_stream`](crate::core::state_graph_stream)
+//!   module.
+//! - **Streaming** — [`StateGraph::stream`] (defined in
+//!   [`state_graph_stream`](crate::core::state_graph_stream)) yields real-time
+//!   [`StreamEvent`](crate::StreamEvent)s.
+//!
+//! # Step-based traversal
+//!
+//! Execution proceeds in discrete steps. Starting from the virtual
+//! [`__start__`](crate::START_NODE) node, each step resolves the outgoing edges
+//! (static and/or conditional) of the current node set, executes all resulting
+//! nodes **concurrently**, and advances to the next set — until the
+//! [`__end__`](crate::END_NODE) node is reached or [`max_steps`](crate::StateGraphBuilder::set_max_steps)
+//! is exhausted.
+
 use crate::core::RouterFn;
 use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
