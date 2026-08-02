@@ -264,7 +264,7 @@ async fn test_state_set_get_roundtrip() -> Result<(), LangGraphError> {
 
     state.set("string_key", "hello world").await?;
     state.set("int_key", 42).await?;
-    state.set("float_key", 3.14).await?;
+    state.set("float_key", 123.456).await?;
 
     let string_val: String = state.get("string_key").await?.unwrap();
     let int_val: i32 = state.get("int_key").await?.unwrap();
@@ -272,7 +272,7 @@ async fn test_state_set_get_roundtrip() -> Result<(), LangGraphError> {
 
     assert_eq!(string_val, "hello world");
     assert_eq!(int_val, 42);
-    assert!((float_val - 3.14).abs() < 0.001);
+    assert!((float_val - 123.456).abs() < 0.001);
 
     Ok(())
 }
@@ -737,7 +737,7 @@ async fn test_concurrent_state_access() -> Result<(), LangGraphError> {
 
     let value: i32 = state.get("counter").await?.unwrap();
     assert!(
-        value >= 100 && value < 200,
+        (100..200).contains(&value),
         "Final value should be from task2"
     );
 
@@ -1773,7 +1773,7 @@ async fn test_complex_nested_data_structure() -> Result<(), LangGraphError> {
             map.insert("key2".to_string(), "value2".to_string());
             map
         },
-        optional: Some(3.14),
+        optional: Some(2.5),
     };
 
     let state = Arc::new(DefaultMemoryState::new());
@@ -2262,7 +2262,7 @@ async fn test_sequential_graph_execution() -> Result<(), LangGraphError> {
 
         let graph = builder.compile()?;
         let state = Arc::new(DefaultMemoryState::new());
-        state.set(&format!("prefix"), prefix).await?;
+        state.set("prefix", prefix).await?;
         graph.invoke(state).await?;
 
         Ok(())

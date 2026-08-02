@@ -34,7 +34,7 @@ impl AgentNode<DefaultMemoryState> for RequestReceiver {
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let request_id = format!("REQ-{:04}", count % 10000);
-        let priorities = vec!["high", "normal", "low"];
+        let priorities = ["high", "normal", "low"];
         let priority = priorities[count % 3].to_string();
 
         println!("   Request ID: {}", request_id);
