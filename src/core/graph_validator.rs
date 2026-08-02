@@ -1,3 +1,24 @@
+//! Compile-time structural validation of workflow graphs.
+//!
+//! This module hosts the validation pass that runs inside
+//! [`StateGraphBuilder::compile`](crate::StateGraphBuilder::compile). It turns a
+//! raw builder definition into a [`ValidatedGraph`] only after every structural
+//! rule passes, guaranteeing that a compiled [`StateGraph`](crate::StateGraph)
+//! is sound before execution.
+//!
+//! # Checks performed
+//!
+//! - `max_steps` is non-zero
+//! - start / end node names are valid and distinct
+//! - at least one node exists, with non-empty names
+//! - the start node is not also a registered node and has outgoing edges
+//! - every static edge target refers to a registered node (or the end node)
+//! - every conditional edge source is a registered node (or the start node)
+//! - **no node has both static and conditional edges** (mutual exclusivity)
+//!
+//! Note that conditional edge *targets* (the values returned by routers) are
+//! resolved at runtime, not here.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::core::RouterFn;
@@ -5,6 +26,12 @@ use crate::core::agent_node::AgentNode;
 use crate::core::agent_state::AgentState;
 use crate::core::error::LangGraphError;
 
+/// A graph definition that has passed all validation checks.
+///
+/// Produced by [`GraphValidator::validate`] and consumed by
+/// [`StateGraphBuilder::compile`](crate::StateGraphBuilder::compile) to construct
+/// the final [`StateGraph`](crate::StateGraph). Its fields mirror the builder's,
+/// but their invariants are now guaranteed.
 pub struct ValidatedGraph<S: AgentState + Send + Sync> {
     pub max_steps: usize,
     pub nodes: HashMap<String, Box<dyn AgentNode<S>>>,
@@ -14,6 +41,11 @@ pub struct ValidatedGraph<S: AgentState + Send + Sync> {
     pub end_node: String,
 }
 
+/// Validates a raw graph definition before it becomes executable.
+///
+/// Constructed internally by
+/// [`StateGraphBuilder::compile`](crate::StateGraphBuilder::compile); call
+/// [`validate`](GraphValidator::validate) to run every structural check.
 pub struct GraphValidator<S: AgentState + Send + Sync> {
     pub max_steps: usize,
     pub nodes: HashMap<String, Box<dyn AgentNode<S>>>,
@@ -24,6 +56,13 @@ pub struct GraphValidator<S: AgentState + Send + Sync> {
 }
 
 impl<S: AgentState + Send + Sync> GraphValidator<S> {
+    /// Run all structural validation checks.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(ValidatedGraph)` — every check passed; the definition is sound.
+    /// - `Err(LangGraphError::GraphError)` — the first violated rule, with a
+    ///   descriptive message.
     pub fn validate(self) -> Result<ValidatedGraph<S>, LangGraphError> {
         Self::validate_max_steps(self.max_steps)?;
         Self::validate_start_end_nodes(&self.start_node, &self.end_node)?;

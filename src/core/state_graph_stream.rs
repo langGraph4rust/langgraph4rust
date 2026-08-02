@@ -12,15 +12,15 @@
 //!        (background task)            (capacity 32)          (Stream impl)
 //! ```
 //!
-//! - [`StateGraph::stream`] spawns a **background driver task** ([`run_driver`])
+//! - [`StateGraph::stream`] spawns a **background driver task** (`run_driver`)
 //!   and immediately returns a [`ReceiverStream`] wrapping the channel receiver.
 //! - The driver pushes [`StreamEvent`]s into a **bounded** channel; when the
 //!   consumer is slow, the driver awaits `send`, providing natural backpressure
 //!   instead of unbounded buffering.
-//! - Nodes within a step run as **concurrent futures** ([`batch_apply_with_events`]
-//!   + [`join_all`]); each future emits its own [`StreamEvent::NodeStarted`] /
-//!   [`StreamEvent::NodeFinished`] at the real moment it starts and finishes, so
-//!   events interleave in true execution order and `elapsed` is per-node.
+//! - Nodes within a step run as **concurrent futures** (via [`join_all`]); each
+//!   emits its own [`StreamEvent::NodeStarted`] / [`StreamEvent::NodeFinished`]
+//!   at the real moment it starts and finishes. Events therefore interleave in
+//!   true execution order, and `elapsed` is each node's actual execution time.
 //!
 //! # Event lifecycle
 //!

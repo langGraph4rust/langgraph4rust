@@ -1,3 +1,14 @@
+//! Error handling for the workflow engine.
+//!
+//! This module defines [`LangGraphError`], the single error type used across
+//! the crate for both graph construction and execution failures. It implements
+//! [`std::error::Error`] and [`Display`](std::fmt::Display), and converts from
+//! `String` / `&str` for ergonomic use with the `?` operator.
+//!
+//! In the streaming API, errors are surfaced as a terminal
+//! [`StreamEvent::WorkflowError`](crate::StreamEvent) rather than being returned,
+//! so that the event stream keeps a uniform item type.
+
 use std::error::Error;
 use std::fmt;
 use std::fmt::Display;

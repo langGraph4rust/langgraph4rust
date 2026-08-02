@@ -1,3 +1,20 @@
+//! Workflow state management.
+//!
+//! This module defines the [`AgentState`] trait — the contract for any state
+//! backend used by the engine — together with [`DefaultMemoryState`], the
+//! built-in in-memory implementation.
+//!
+//! State is the shared, mutable context passed to every [`AgentNode`](crate::AgentNode).
+//! Values are stored as JSON internally but accessed with full type safety via
+//! serde: [`AgentState::get`] deserializes into a caller-chosen type and
+//! [`AgentState::set`] serializes any `Serialize` value.
+//!
+//! # Concurrency
+//!
+//! Because parallel nodes may access the state simultaneously, implementations
+//! must be `Send + Sync`. [`DefaultMemoryState`] achieves this with an internal
+//! `RwLock`-guarded map.
+
 use crate::core::error::LangGraphError;
 use serde::Serialize;
 use serde::de::DeserializeOwned;

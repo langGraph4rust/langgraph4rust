@@ -14,7 +14,7 @@
 //! | [`state_graph`](crate::StateGraph) | Compiled, immutable graph and batch execution ([`invoke`](crate::StateGraph::invoke)) |
 //! | [`state_graph_stream`](crate::StreamEvent) | Push-based streaming execution ([`stream`](crate::StateGraph::stream)) |
 //! | `graph_validator` | Compile-time structural validation (internal) |
-//! | [`error`](crate::LangGraphError) | The [`LangGraphError`](crate::LangGraphError) type |
+//! | [`error`](crate::LangGraphError) | The [`LangGraphError`] type |
 //!
 //! # Execution flow
 //!
