@@ -7,6 +7,8 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
+[English](README.md) | **简体中文** | [Deutsch](README.de.md) | [日本語](README.ja.md)
+
 **受 Python LangGraph 库启发的强大 Rust 有状态工作流引擎实现。**
 
 `langgraph4rust` 提供了一个灵活、类型安全且以异步优先的框架，用于构建、执行和管理复杂的工作流图，支持并行执行和条件路由。

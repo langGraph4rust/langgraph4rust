@@ -7,6 +7,8 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
+[English](README.md) | [简体中文](README.zh-CN.md) | **Deutsch** | [日本語](README.ja.md)
+
 **Eine leistungsstarke Rust-Implementierung einer zustandsbehafteten Workflow-Engine, inspiriert von Pythons LangGraph-Bibliothek.**
 
 `langgraph4rust` bietet ein flexibles, typsicheres und asynchrones Framework zum Erstellen, Ausführen und Verwalten komplexer Workflow-Grafen mit Unterstützung für parallele Ausführung und bedingtes Routing.

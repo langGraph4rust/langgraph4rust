@@ -7,6 +7,8 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
+[English](README.md) | [简体中文](README.zh-CN.md) | [Deutsch](README.de.md) | **日本語**
+
 **PythonのLangGraphライブラリにインスパイアされた、強力なRust製ステートフルワークフローエンジン。**
 
 `langgraph4rust`は、柔軟で型安全かつ非同期優先のフレームワークを提供し、複雑なワークフローグラフの構築・実行・管理を可能にします。並列実行と条件付きルーティングをサポートしています。
