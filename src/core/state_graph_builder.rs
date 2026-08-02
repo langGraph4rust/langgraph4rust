@@ -526,6 +526,11 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     ///    - If graph contains cycles, requires `max_steps` to be set
     ///    - Prevents accidental infinite loops
     ///
+    /// 7. **Edge Type Mutual Exclusivity**
+    ///    - A node cannot have both static edges and conditional edges
+    ///    - To merge multiple routing targets, use a single conditional edge
+    ///      with multiple router functions (their results are unioned)
+    ///
     /// # Returns
     ///
     /// - **Ok(StateGraph)**: Successfully compiled, ready for execution
@@ -539,6 +544,7 @@ impl<S: AgentState + Send + Sync> StateGraphBuilder<S> {
     /// Graph error: Empty graph - at least one node required
     /// Graph error: Edge from 'node_a' references unknown target 'node_z'
     /// Graph error: No path exists from '__start__' to '__end__'
+    /// Graph error: Node 'node_a' cannot have both static edges and conditional edges
     /// ```
     ///
     /// # Consumption
