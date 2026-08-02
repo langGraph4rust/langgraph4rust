@@ -16,6 +16,7 @@
 - **🏗️ 声明式图构建**：使用直观的构建器模式定义工作流
 - **⚡ 并行执行**：当依赖允许时，多个节点可以同时执行
 - **🔀 条件路由**：根据运行时状态条件动态选择路径
+- **📡 流式执行**：实时、推送式的 `StreamEvent` 事件流，观测工作流执行进度
 - **💾 状态管理**：内置基于 JSON 的状态持久化，完全类型安全
 - **🔌 可扩展架构**：通过 trait 实现自定义节点
 - **✅ 全面验证**：执行前验证图结构，防止运行时错误
@@ -27,7 +28,7 @@
 
 ```toml
 [dependencies]
-langgraph4rust = "0.1.1"
+langgraph4rust = "0.2.0"
 ```
 
 ## 🚀 快速开始
@@ -112,15 +113,15 @@ impl AgentNode<DefaultMemoryState> for MyNode {
 // 静态边
 builder.add_edge("node_a", HashSet::from(["node_b".to_string()]));
 
-// 条件路由（参见 conditional_routing 示例）
-builder.add_conditional_edges(
+// 条件边：router 是*同步*闭包，检查状态并返回下一个节点的名称。
+// 可提供多个 router，其返回的目标会合并为下一步的并集。
+builder.add_conditional_edge(
     "decision_node",
-    |state| async move { /* 路由逻辑 */ },
-    HashMap::from([
-        ("option_a".to_string(), HashSet::from(["node_x".to_string()])),
-        ("option_b".to_string(), HashSet::from(["node_y".to_string()])),
-    ])
-)?;
+    vec![Box::new(|_state: &DefaultMemoryState| {
+        // 根据状态返回所选目标节点的名称。
+        "node_x".to_string()
+    })],
+);
 ```
 
 ### 状态 💾
@@ -136,6 +137,58 @@ state.set("key", "value").await?;
 // 获取类型化值
 let value: String = state.get("key").await?.unwrap();
 ```
+
+### 流式执行 📡
+
+除了 `invoke()`，编译后的图还可以作为**推送式事件流**执行。这非常适合进度上报、日志记录和实时 UI：
+
+```rust
+use langgraph4rust::*;
+use std::collections::HashSet;
+use std::sync::Arc;
+use async_trait::async_trait;
+
+#[derive(Clone)]
+struct WorkNode;
+
+#[async_trait]
+impl AgentNode<DefaultMemoryState> for WorkNode {
+    async fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+        state.set("done", true).await?;
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("work", Box::new(WorkNode));
+    builder.add_edge(START_NODE, HashSet::from(["work".to_string()]));
+    builder.add_edge("work", HashSet::from([END_NODE.to_string()]));
+
+    let graph = Arc::new(builder.compile()?);
+    let state = Arc::new(DefaultMemoryState::new());
+
+    // `stream` 消费 Arc<StateGraph> 并产出 `StreamEvent`。
+    let mut events = graph.stream(state);
+    while let Some(event) = events.next().await {
+        match event {
+            StreamEvent::WorkflowStarted => println!("▶ 工作流已启动"),
+            StreamEvent::NodeFinished { name, elapsed, .. } => {
+                println!("✓ 节点 '{name}' 完成，耗时 {elapsed:?}")
+            }
+            StreamEvent::WorkflowFinished { total_steps, elapsed, .. } => {
+                println!("■ 完成：共 {total_steps} 步，耗时 {elapsed:?}")
+            }
+            StreamEvent::WorkflowError { error, .. } => eprintln!("✗ 失败：{error}"),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+```
+
+该流始终以 `WorkflowFinished`（成功）或 `WorkflowError`（失败）作为最后一个事件终结——错误作为*事件*传递，而非通过返回值。
 
 ## 📚 示例
 
@@ -173,7 +226,7 @@ cargo run --example <example_name>
 │         ▲                         │        │
 │         └──────────(state)────────┘        │
 └─────────────────────────────────────────────┘
-                   │ invoke()
+                   │ invoke() / stream()
                    ▼
 ┌─────────────────────────────────────────────┐
 │          DefaultMemoryState                 │
@@ -191,6 +244,7 @@ cargo run --example <example_name>
 - **[`AgentState`](src/core/agent_state.rs)**：状态管理后端的 trait
 - **[`DefaultMemoryState`](src/core/agent_state.rs)**：内置的基于 JSON 的状态实现
 - **[`LangGraphError`](src/core/error.rs)**：库的错误类型
+- **[`StreamEvent`](src/core/state_graph_stream.rs)**：流式 API 发出的事件
 
 ### 关键方法
 
@@ -199,11 +253,12 @@ cargo run --example <example_name>
 StateGraphBuilder::new()                          // 创建新构建器
 builder.add_node(name, node)                      // 添加节点
 builder.add_edge(from, to)                        // 添加静态边
-builder.add_conditional_edges(from, router, map)  // 添加条件边
+builder.add_conditional_edge(from, routers)       // 添加条件边（routers: Vec<Box<dyn Fn(&S) -> String>>）
 builder.compile()                                 // 验证并构建图
 
 // 执行工作流
-graph.invoke(initial_state)                       // 运行工作流
+graph.invoke(initial_state)                       // 运行工作流至完成
+graph.stream(initial_state)                       // 以推送式 StreamEvent 流运行
 
 // 管理状态
 state.set(key, value).await                       // 存储值

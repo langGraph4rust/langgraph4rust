@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/langgraph4rust.svg)](https://crates.io/crates/langgraph4rust)
 [![Docs.rs](https://docs.rs/langgraph4rust/badge.svg)](https://docs.rs/langgraph4rust)
 [![Downloads](https://img.shields.io/crates/d/langgraph4rust.svg)](https://crates.io/crates/langgraph4rust)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
 **Eine leistungsstarke Rust-Implementierung einer zustandsbehafteten Workflow-Engine, inspiriert von Pythons LangGraph-Bibliothek.**
@@ -16,6 +16,7 @@
 - **🏗️ Deklarativer Grafen-Aufbau**: Definition von Workflows mit einem intuitiven Builder-Muster
 - **⚡ Parallele Ausführung**: Mehrere Knoten können gleichzeitig ausgeführt werden, wenn Abhängigkeiten dies zulassen
 - **🔀 Bedingtes Routing**: Dynamische Pfadauswahl basierend auf Laufzeitzustandsbedingungen
+- **📡 Streaming-Ausführung**: Echtzeit-, push-basierter `StreamEvent`-Stream zur Beobachtung des Workflow-Fortschritts
 - **💾 Zustandsverwaltung**: Integrierte JSON-basierte Zustandspersistenz mit vollständiger Typsicherheit
 - **🔌 Erweiterbare Architektur**: Benutzerdefinierte Knotenimplementierungen über Traits
 - **✅ Umfassende Validierung**: Grafenstrukturvalidierung vor der Ausführung verhindert Laufzeitfehler
@@ -27,7 +28,7 @@ Fügen Sie dies zu Ihrem `Cargo.toml` hinzu:
 
 ```toml
 [dependencies]
-langgraph4rust = "0.1.1"
+langgraph4rust = "0.2.0"
 ```
 
 ## 🚀 Schnellstart
@@ -112,15 +113,16 @@ Kanten definieren den Kontrollfluss zwischen Knoten:
 // Statische Kante
 builder.add_edge("node_a", HashSet::from(["node_b".to_string()]));
 
-// Bedingtes Routing (siehe conditional_routing Beispiel)
-builder.add_conditional_edges(
+// Bedingte Kante: Router sind *synchrone* Closures, die den Zustand prüfen
+// und den Namen des nächsten Knotens zurückgeben. Mehrere Router sind erlaubt;
+// ihre zurückgegebenen Ziele werden zum nächsten Schritt vereinigt.
+builder.add_conditional_edge(
     "decision_node",
-    |state| async move { /* Routing-Logik */ },
-    HashMap::from([
-        ("option_a".to_string(), HashSet::from(["node_x".to_string()])),
-        ("option_b".to_string(), HashSet::from(["node_y".to_string()])),
-    ])
-)?;
+    vec![Box::new(|_state: &DefaultMemoryState| {
+        // Den gewählten Zielknotennamen basierend auf dem Zustand zurückgeben.
+        "node_x".to_string()
+    })],
+);
 ```
 
 ### Zustand 💾
@@ -137,6 +139,62 @@ state.set("key", "value").await?;
 let value: String = state.get("key").await?.unwrap();
 ```
 
+### Streaming-Ausführung 📡
+
+Zusätzlich zu `invoke()` kann ein kompilierter Graf als **push-basierter
+Event-Stream** ausgeführt werden. Dies ist ideal für Fortschrittsberichte,
+Logging und Live-UIs:
+
+```rust
+use langgraph4rust::*;
+use std::collections::HashSet;
+use std::sync::Arc;
+use async_trait::async_trait;
+
+#[derive(Clone)]
+struct WorkNode;
+
+#[async_trait]
+impl AgentNode<DefaultMemoryState> for WorkNode {
+    async fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+        state.set("done", true).await?;
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("work", Box::new(WorkNode));
+    builder.add_edge(START_NODE, HashSet::from(["work".to_string()]));
+    builder.add_edge("work", HashSet::from([END_NODE.to_string()]));
+
+    let graph = Arc::new(builder.compile()?);
+    let state = Arc::new(DefaultMemoryState::new());
+
+    // `stream` verbraucht den Arc<StateGraph> und liefert `StreamEvent`s.
+    let mut events = graph.stream(state);
+    while let Some(event) = events.next().await {
+        match event {
+            StreamEvent::WorkflowStarted => println!("▶ Workflow gestartet"),
+            StreamEvent::NodeFinished { name, elapsed, .. } => {
+                println!("✓ Knoten '{name}' fertig in {elapsed:?}")
+            }
+            StreamEvent::WorkflowFinished { total_steps, elapsed, .. } => {
+                println!("■ fertig: {total_steps} Schritte in {elapsed:?}")
+            }
+            StreamEvent::WorkflowError { error, .. } => eprintln!("✗ fehlgeschlagen: {error}"),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+```
+
+Der Stream endet immer mit entweder `WorkflowFinished` (Erfolg) oder
+`WorkflowError` (Fehler) als letztem Ereignis — Fehler werden *als Ereignisse*
+geliefert, nicht über den Rückgabewert.
+
 ## 📚 Beispiele
 
 Erkunden Sie das `examples/`-Verzeichnis für vollständige funktionierende Beispiele:
@@ -145,7 +203,7 @@ Erkunden Sie das `examples/`-Verzeichnis für vollständige funktionierende Beis
 |-----------|--------------|
 | [hello_world](examples/hello_world.rs) | Einfacher linearer Workflow - perfekter Einstiegspunkt |
 | [conditional_routing](examples/conditional_routing.rs) | Dynamische Pfadauswahl basierend auf Zustand |
-| [parallel_execution](examples/parallel_execution.rs | Gleichzeitige Knotenausführung |
+| [parallel_execution](examples/parallel_execution.rs) | Gleichzeitige Knotenausführung |
 | [custom_state](examples/custom_state.rs) | Implementierung benutzerdefinierter Zustands-Backends |
 | [data_pipeline](examples/data_pipeline.rs) | Mehrstufige Datenverarbeitungspipeline |
 | [error_handling](examples/error_handling.rs) | Robuste Fehlerbehandlungsstrategien |
@@ -173,7 +231,7 @@ cargo run --example <example_name>
 │         ▲                         │        │
 │         └──────────(state)────────┘        │
 └─────────────────────────────────────────────┘
-                   │ invoke()
+                   │ invoke() / stream()
                    ▼
 ┌─────────────────────────────────────────────┐
 │          DefaultMemoryState                 │
@@ -191,6 +249,7 @@ cargo run --example <example_name>
 - **[`AgentState`](src/core/agent_state.rs)**: Trait für Zustandsverwaltungs-Backends
 - **[`DefaultMemoryState`](src/core/agent_state.rs)**: Integrierte JSON-basierte Zustandsimplementierung
 - **[`LangGraphError`](src/core/error.rs)**: Fehlertyp für die Bibliothek
+- **[`StreamEvent`](src/core/state_graph_stream.rs)**: Vom Streaming-API ausgegebene Ereignisse
 
 ### Wichtige Methoden
 
@@ -199,11 +258,12 @@ cargo run --example <example_name>
 StateGraphBuilder::new()                          // Neuen Builder erstellen
 builder.add_node(name, node)                      // Knoten hinzufügen
 builder.add_edge(from, to)                        // Statische Kante hinzufügen
-builder.add_conditional_edges(from, router, map)  // Bedingte Kante hinzufügen
+builder.add_conditional_edge(from, routers)       // Bedingte Kante hinzufügen (routers: Vec<Box<dyn Fn(&S) -> String>>)
 builder.compile()                                 // Validieren & Grafen bauen
 
 // Workflows ausführen
-graph.invoke(initial_state)                       // Workflow ausführen
+graph.invoke(initial_state)                       // Workflow bis zum Abschluss ausführen
+graph.stream(initial_state)                       // Mit push-basiertem StreamEvent-Stream ausführen
 
 // Zustand verwalten
 state.set(key, value).await                       // Wert speichern
