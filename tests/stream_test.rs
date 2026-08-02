@@ -67,11 +67,14 @@ impl AgentNode<DefaultMemoryState> for RouterNode {
 
 // ─── 辅助函数 ────────────────────────────────────────────────────────────────
 
-/// 收集流中所有事件
-async fn collect_events(
-    graph: Arc<langgraph4rust::StateGraph<DefaultMemoryState>>,
-    state: Arc<DefaultMemoryState>,
-) -> Vec<StreamEvent<DefaultMemoryState>> {
+/// 收集流中所有事件（泛型：支持任意 AgentState 实现）
+async fn collect_events<S>(
+    graph: Arc<langgraph4rust::StateGraph<S>>,
+    state: Arc<S>,
+) -> Vec<StreamEvent<S>>
+where
+    S: AgentState + Send + Sync + 'static,
+{
     let mut rx = graph.stream(state);
     let mut events = Vec::new();
     while let Some(event) = rx.next().await {
