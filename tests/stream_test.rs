@@ -83,6 +83,14 @@ where
     events
 }
 
+/// 从事件流末尾提取 WorkflowError 携带的错误（测试辅助）
+fn extract_error(events: &[StreamEvent<DefaultMemoryState>]) -> &LangGraphError {
+    match events.last() {
+        Some(StreamEvent::WorkflowError { error, .. }) => error,
+        _ => panic!("expected WorkflowError as last event"),
+    }
+}
+
 // ─── 1. 线性工作流：事件完整序列 ─────────────────────────────────────────────
 
 /// start → A → end
@@ -1494,21 +1502,14 @@ async fn test_error_variant_fidelity() -> Result<(), LangGraphError> {
         collect_events(graph, Arc::new(DefaultMemoryState::new())).await
     };
 
-    let extract = |events: &Vec<StreamEvent<DefaultMemoryState>>| -> &LangGraphError {
-        match events.last() {
-            Some(StreamEvent::WorkflowError { error, .. }) => error,
-            _ => panic!("expected WorkflowError"),
-        }
-    };
-
     let e_timeout = run(ErrKind::Timeout).await;
-    assert!(matches!(extract(&e_timeout), LangGraphError::Timeout(_)));
+    assert!(matches!(extract_error(&e_timeout), LangGraphError::Timeout(_)));
 
     let e_state = run(ErrKind::State).await;
-    assert!(matches!(extract(&e_state), LangGraphError::StateError(_)));
+    assert!(matches!(extract_error(&e_state), LangGraphError::StateError(_)));
 
     let e_retry = run(ErrKind::Retry).await;
-    assert!(matches!(extract(&e_retry), LangGraphError::RetryExhausted(_)));
+    assert!(matches!(extract_error(&e_retry), LangGraphError::RetryExhausted(_)));
     Ok(())
 }
 
