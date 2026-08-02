@@ -1691,3 +1691,290 @@ async fn test_diamond_total_steps() -> Result<(), LangGraphError> {
     }
     Ok(())
 }
+
+// ─── 45. 慢消费者背压：逐事件延迟不丢失不乱序 ───────────────────────────
+
+#[tokio::test]
+async fn test_slow_consumer_no_event_loss() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_node("b", Box::new(CounterNode));
+    builder.add_node("c", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from(["b".to_string()]));
+    builder.add_edge("b", HashSet::from(["c".to_string()]));
+    builder.add_edge("c", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let mut rx = graph.stream(Arc::new(DefaultMemoryState::new()));
+    let mut events = Vec::new();
+    while let Some(e) = rx.next().await {
+        events.push(e);
+        // 慢消费者：每次轮询后休眠，迫使生产者受背压阻塞
+        tokio::time::sleep(Duration::from_millis(3)).await;
+    }
+    // N=3 线性图：3 + 4*3 = 15 个事件，一个不多一个不少
+    assert_eq!(events.len(), 15, "slow consumer must not lose events");
+    assert!(matches!(events.first(), Some(StreamEvent::WorkflowStarted)));
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    Ok(())
+}
+
+// ─── 46. 深线性链压力：50 节点 ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_deep_linear_chain_stress() -> Result<(), LangGraphError> {
+    const N: usize = 50;
+    let mut builder = StateGraphBuilder::new();
+    let names: Vec<String> = (0..N).map(|i| format!("n{i}")).collect();
+    for name in &names {
+        builder.add_node(name, Box::new(CounterNode));
+    }
+    builder.add_edge(START_NODE, HashSet::from([names[0].clone()]));
+    for w in names.windows(2) {
+        builder.add_edge(&w[0], HashSet::from([w[1].clone()]));
+    }
+    builder.add_edge(&names[N - 1], HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
+
+    assert_eq!(events.len(), 3 + 4 * N, "event count formula must hold for deep chain");
+    if let Some(StreamEvent::WorkflowFinished { total_steps, .. }) = events.last() {
+        assert_eq!(*total_steps, N + 2);
+    } else {
+        panic!("expected WorkflowFinished");
+    }
+    let count: i32 = state.get("count").await?.unwrap_or(0);
+    assert_eq!(count, N as i32, "every node should have incremented count");
+    Ok(())
+}
+
+// ─── 47. 并行节点写入不同键均可见 ────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_parallel_nodes_write_distinct_keys() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node(
+        "wx",
+        Box::new(SetIntNode {
+            key: "x".to_string(),
+            value: 100,
+        }),
+    );
+    builder.add_node(
+        "wy",
+        Box::new(SetIntNode {
+            key: "y".to_string(),
+            value: 200,
+        }),
+    );
+    builder.add_edge(
+        START_NODE,
+        HashSet::from(["wx".to_string(), "wy".to_string()]),
+    );
+    builder.add_edge("wx", HashSet::from([END_NODE.to_string()]));
+    builder.add_edge("wy", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+
+    let x: i32 = state.get("x").await?.unwrap_or(0);
+    let y: i32 = state.get("y").await?.unwrap_or(0);
+    assert_eq!((x, y), (100, 200), "both parallel writes must be visible");
+    Ok(())
+}
+
+// ─── 48. 图复用：不同初始状态产生不同结果 ────────────────────────────────────
+
+#[tokio::test]
+async fn test_graph_reuse_with_different_initial_state() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    // 初始 count=10 → 执行后 11
+    let s1 = Arc::new(DefaultMemoryState::new());
+    s1.set("count", 10i32).await?;
+    let _ = collect_events(Arc::clone(&graph), Arc::clone(&s1)).await;
+    let c1: i32 = s1.get("count").await?.unwrap_or(0);
+    assert_eq!(c1, 11);
+
+    // 全新状态 → 1
+    let s2 = Arc::new(DefaultMemoryState::new());
+    let _ = collect_events(Arc::clone(&graph), Arc::clone(&s2)).await;
+    let c2: i32 = s2.get("count").await?.unwrap_or(0);
+    assert_eq!(c2, 1);
+    Ok(())
+}
+
+// ─── 49. 并发流混合成败：同图上一成功一失败互不干扰 ───────────────────────
+
+#[tokio::test]
+async fn test_concurrent_streams_mixed_success_failure() -> Result<(), LangGraphError> {
+    // 成功图
+    let mut ok_builder = StateGraphBuilder::new();
+    ok_builder.add_node("a", Box::new(CounterNode));
+    ok_builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    ok_builder.add_edge("a", HashSet::from([END_NODE.to_string()]));
+    let ok_graph = Arc::new(ok_builder.compile()?);
+
+    // 失败图
+    let mut fail_builder = StateGraphBuilder::new();
+    fail_builder.add_node("f", Box::new(FailingNode));
+    fail_builder.add_edge(START_NODE, HashSet::from(["f".to_string()]));
+    fail_builder.add_edge("f", HashSet::from([END_NODE.to_string()]));
+    let fail_graph = Arc::new(fail_builder.compile()?);
+
+    let (ok_events, fail_events) = tokio::join!(
+        collect_events(Arc::clone(&ok_graph), Arc::new(DefaultMemoryState::new())),
+        collect_events(Arc::clone(&fail_graph), Arc::new(DefaultMemoryState::new())),
+    );
+    assert!(matches!(ok_events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(fail_events.last(), Some(StreamEvent::WorkflowError { .. })));
+    Ok(())
+}
+
+// ─── 50. 跨步顺序不变量：step N 的 RoutingDecision 先于 step N+1 的 StepStarted ───
+
+#[tokio::test]
+async fn test_cross_step_event_ordering() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_node("b", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from(["b".to_string()]));
+    builder.add_edge("b", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    // RoutingDecision{step:2} 必须出现在 StepStarted{step:3} 之前
+    let route2 = events
+        .iter()
+        .position(|e| matches!(e, StreamEvent::RoutingDecision { step: 2, .. }));
+    let step3 = events
+        .iter()
+        .position(|e| matches!(e, StreamEvent::StepStarted { step: 3, .. }));
+    match (route2, step3) {
+        (Some(r), Some(s)) => assert!(r < s, "routing of step N must precede StepStarted of step N+1"),
+        _ => panic!("both events should exist"),
+    }
+    Ok(())
+}
+
+// ─── 51. 多级条件路由链：连续两步条件决策 ────────────────────────────────────
+
+#[tokio::test]
+async fn test_conditional_chain_multiple_steps() -> Result<(), LangGraphError> {
+    // start → r1 ─(cond)→ r2 ─(cond)→ end
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("r1", Box::new(RouterNode));
+    builder.add_node("r2", Box::new(RouterNode));
+    builder.add_edge(START_NODE, HashSet::from(["r1".to_string()]));
+    builder.add_conditional_edge(
+        "r1",
+        vec![Box::new(|_s: &DefaultMemoryState| "r2".to_string())],
+    );
+    builder.add_conditional_edge(
+        "r2",
+        vec![Box::new(|_s: &DefaultMemoryState| END_NODE.to_string())],
+    );
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    // r1 和 r2 都应被执行
+    assert!(events.iter().any(|e| matches!(e, StreamEvent::NodeStarted { name, .. } if name == "r1")));
+    assert!(events.iter().any(|e| matches!(e, StreamEvent::NodeStarted { name, .. } if name == "r2")));
+    // 共 3 条 RoutingDecision：start→r1, r1→r2, r2→end
+    let routing_count = events
+        .iter()
+        .filter(|e| matches!(e, StreamEvent::RoutingDecision { .. }))
+        .count();
+    assert_eq!(routing_count, 3);
+    Ok(())
+}
+
+// ─── 52. 并行执行中弃流：图不被污染，仍可复用 ────────────────────────────────
+
+#[tokio::test]
+async fn test_abandoned_stream_does_not_poison_graph() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("s1", Box::new(SlowNode { ms: 150 }));
+    builder.add_node("s2", Box::new(SlowNode { ms: 150 }));
+    builder.add_edge(
+        START_NODE,
+        HashSet::from(["s1".to_string(), "s2".to_string()]),
+    );
+    builder.add_edge("s1", HashSet::from([END_NODE.to_string()]));
+    builder.add_edge("s2", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    // 在并行慢节点执行期间丢弃接收方
+    let mut rx = Arc::clone(&graph).stream(Arc::new(DefaultMemoryState::new()));
+    let _ = rx.next().await; // WorkflowStarted
+    drop(rx);
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    // 同一图仍可正常跑完一个新流
+    let events = collect_events(Arc::clone(&graph), Arc::new(DefaultMemoryState::new())).await;
+    assert!(
+        matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })),
+        "graph must remain usable after an abandoned stream"
+    );
+    Ok(())
+}
+
+// ─── 53. NodeFinished.elapsed 不小于节点自身休眠时长 ─────────────────────────
+
+#[tokio::test]
+async fn test_node_finished_elapsed_lower_bound() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("slow", Box::new(SlowNode { ms: 60 }));
+    builder.add_edge(START_NODE, HashSet::from(["slow".to_string()]));
+    builder.add_edge("slow", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+    let elapsed = events.iter().find_map(|e| match e {
+        StreamEvent::NodeFinished { name, elapsed, .. } if name == "slow" => Some(*elapsed),
+        _ => None,
+    });
+    match elapsed {
+        Some(d) => assert!(
+            d >= Duration::from_millis(55),
+            "elapsed {:?} should reflect the 60ms sleep",
+            d
+        ),
+        None => panic!("NodeFinished for slow node should exist"),
+    }
+    Ok(())
+}
+
+// ─── 54. 首个真实节点即失败：WorkflowError.step == 2 ─────────────────────────
+
+#[tokio::test]
+async fn test_failure_at_first_real_node_step() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("f", Box::new(FailingNode));
+    builder.add_edge(START_NODE, HashSet::from(["f".to_string()]));
+    builder.add_edge("f", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+    match events.last() {
+        Some(StreamEvent::WorkflowError { step, .. }) => {
+            // __start__ 占 step1，首个真实节点 f 在 step2 失败
+            assert_eq!(*step, 2, "first real node fails at step 2");
+        }
+        _ => panic!("expected WorkflowError"),
+    }
+    Ok(())
+}
