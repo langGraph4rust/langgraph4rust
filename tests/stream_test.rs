@@ -1103,3 +1103,318 @@ async fn test_state_dependent_conditional_routing() -> Result<(), LangGraphError
     assert_eq!(left, None, "left branch should NOT be visited");
     Ok(())
 }
+
+// ─── 补充辅助节点 ─────────────────────────────────────────────────────────────
+
+/// 写入固定整数的节点
+#[derive(Debug, Clone)]
+struct SetIntNode {
+    key: String,
+    value: i32,
+}
+
+#[langgraph4rust::async_trait]
+impl AgentNode<DefaultMemoryState> for SetIntNode {
+    async fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+        state.set(&self.key, self.value).await?;
+        Ok(())
+    }
+}
+
+/// 读取 read_key 并将其两倍写入 write_key 的节点（验证跨步数据依赖）
+#[derive(Debug, Clone)]
+struct DoubleNode {
+    read_key: String,
+    write_key: String,
+}
+
+#[langgraph4rust::async_trait]
+impl AgentNode<DefaultMemoryState> for DoubleNode {
+    async fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+        let v: i32 = state.get(&self.read_key).await?.unwrap_or(0);
+        state.set(&self.write_key, v * 2).await?;
+        Ok(())
+    }
+}
+
+// ─── 27. 事件不变量：NodeStarted 与 NodeFinished 严格配对 ───────────────────
+
+#[tokio::test]
+async fn test_node_started_finished_pairing() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_node("b", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from(["b".to_string()]));
+    builder.add_edge("b", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    // (step, name) 集合：NodeStarted 与 NodeFinished 应完全一致
+    let started: HashSet<(usize, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::NodeStarted { step, name } => Some((*step, name.clone())),
+            _ => None,
+        })
+        .collect();
+    let finished: HashSet<(usize, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::NodeFinished { step, name, .. } => Some((*step, name.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, finished, "every NodeStarted must pair with a NodeFinished");
+    assert_eq!(started.len(), 2, "two real nodes should run");
+    Ok(())
+}
+
+// ─── 28. 顺序不变量：NodeStarted 总在其 NodeFinished 之前 ───────────────────
+
+#[tokio::test]
+async fn test_node_started_precedes_its_finished() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("slow", Box::new(SlowNode { ms: 20 }));
+    builder.add_edge(START_NODE, HashSet::from(["slow".to_string()]));
+    builder.add_edge("slow", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    let started_pos = events
+        .iter()
+        .position(|e| matches!(e, StreamEvent::NodeStarted { name, .. } if name == "slow"));
+    let finished_pos = events
+        .iter()
+        .position(|e| matches!(e, StreamEvent::NodeFinished { name, .. } if name == "slow"));
+    match (started_pos, finished_pos) {
+        (Some(s), Some(f)) => assert!(s < f, "NodeStarted must come before NodeFinished"),
+        _ => panic!("both NodeStarted and NodeFinished should exist"),
+    }
+    Ok(())
+}
+
+// ─── 29. 顺序不变量：StepStarted 在同步 NodeStarted 之前 ────────────────────
+
+#[tokio::test]
+async fn test_step_started_precedes_node_started() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    // 真实节点在 step 2：StepStarted{2} 应出现在 NodeStarted{2} 之前
+    let step_pos = events
+        .iter()
+        .position(|e| matches!(e, StreamEvent::StepStarted { step: 2, .. }));
+    let node_pos = events
+        .iter()
+        .position(|e| matches!(e, StreamEvent::NodeStarted { step: 2, .. }));
+    match (step_pos, node_pos) {
+        (Some(sp), Some(np)) => assert!(sp < np, "StepStarted must precede NodeStarted"),
+        _ => panic!("both StepStarted and NodeStarted for step 2 should exist"),
+    }
+    Ok(())
+}
+
+// ─── 30. __start__ 虚拟步不产生 StepStarted ─────────────────────────────────
+
+#[tokio::test]
+async fn test_no_step_started_for_start_step() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_node("b", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from(["b".to_string()]));
+    builder.add_edge("b", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    // step 1 是 __start__ 虚拟步，只有 RoutingDecision，绝不应有 StepStarted
+    assert!(
+        !events.iter().any(|e| matches!(e, StreamEvent::StepStarted { step: 1, .. })),
+        "__start__ step (1) must not emit StepStarted"
+    );
+    Ok(())
+}
+
+// ─── 31. max_steps 精确边界：刚好足够→成功，差一步→失败 ───────────────────
+
+/// start→a→end 需 total_steps=3（start路由 + a执行 + end检测）
+#[tokio::test]
+async fn test_max_steps_exact_boundary() -> Result<(), LangGraphError> {
+    // max_steps = 3：刚好足够 → WorkflowFinished
+    let mut builder = StateGraphBuilder::new();
+    builder.set_max_steps(3);
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+    match events.last() {
+        Some(StreamEvent::WorkflowFinished { total_steps, .. }) => {
+            assert_eq!(*total_steps, 3, "should finish exactly at max_steps");
+        }
+        other => panic!("expected WorkflowFinished, got {:?}", std::mem::discriminant(other.unwrap())),
+    }
+
+    // max_steps = 2：差一步 → WorkflowError(max_steps)
+    let mut builder = StateGraphBuilder::new();
+    builder.set_max_steps(2);
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+    assert!(
+        matches!(events.last(), Some(StreamEvent::WorkflowError { .. })),
+        "one step short of max_steps should error"
+    );
+    Ok(())
+}
+
+// ─── 32. 条件路由返回未注册节点 → 运行时 NotFound 错误 ─────────────────────
+
+/// 验证器只检查条件边源头，router 返回值的合法性在运行时才暴露
+#[tokio::test]
+async fn test_conditional_router_unknown_target_errors() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("router", Box::new(RouterNode));
+    builder.add_edge(START_NODE, HashSet::from(["router".to_string()]));
+    builder.add_conditional_edge(
+        "router",
+        vec![Box::new(|_state: &DefaultMemoryState| "ghost".to_string())],
+    );
+    // 能编译通过（ghost 未被静态检查）
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    match events.last() {
+        Some(StreamEvent::WorkflowError { error, .. }) => {
+            assert!(
+                matches!(error, LangGraphError::NotFound(_)),
+                "unknown router target should yield NotFound"
+            );
+        }
+        _ => panic!("expected WorkflowError for unknown router target"),
+    }
+    Ok(())
+}
+
+// ─── 33. 跨步数据依赖：后续节点可读前置节点写入的值 ───────────────────────
+
+#[tokio::test]
+async fn test_data_dependency_across_steps() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node(
+        "init",
+        Box::new(SetIntNode {
+            key: "n".to_string(),
+            value: 5,
+        }),
+    );
+    builder.add_node(
+        "double",
+        Box::new(DoubleNode {
+            read_key: "n".to_string(),
+            write_key: "n2".to_string(),
+        }),
+    );
+    builder.add_edge(START_NODE, HashSet::from(["init".to_string()]));
+    builder.add_edge("init", HashSet::from(["double".to_string()]));
+    builder.add_edge("double", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
+
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    // double 读到 init 写入的 5，写出 10
+    let n2: i32 = state.get("n2").await?.unwrap_or(0);
+    assert_eq!(n2, 10, "downstream node should see upstream write");
+    Ok(())
+}
+
+// ─── 34. WorkflowFinished.elapsed 不小于最慢节点耗时 ────────────────────────
+
+#[tokio::test]
+async fn test_workflow_finished_elapsed_lower_bound() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("fast", Box::new(SlowNode { ms: 30 }));
+    builder.add_node("slow", Box::new(SlowNode { ms: 60 }));
+    builder.add_edge(
+        START_NODE,
+        HashSet::from(["fast".to_string(), "slow".to_string()]),
+    );
+    builder.add_edge("fast", HashSet::from([END_NODE.to_string()]));
+    builder.add_edge("slow", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    let max_node_elapsed = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::NodeFinished { elapsed, .. } => Some(*elapsed),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(Duration::ZERO);
+
+    if let Some(StreamEvent::WorkflowFinished { elapsed, .. }) = events.last() {
+        assert!(
+            *elapsed >= max_node_elapsed,
+            "workflow elapsed {:?} must encompass slowest node {:?}",
+            elapsed,
+            max_node_elapsed
+        );
+    } else {
+        panic!("last event should be WorkflowFinished");
+    }
+    Ok(())
+}
+
+// ─── 35. 终结事件唯一性：有且仅有一个且位于末尾 ─────────────────────────────
+
+#[tokio::test]
+async fn test_exactly_one_terminal_event() -> Result<(), LangGraphError> {
+    let count_terminal = |events: &Vec<StreamEvent<DefaultMemoryState>>| {
+        events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::WorkflowFinished { .. } | StreamEvent::WorkflowError { .. }
+                )
+            })
+            .count()
+    };
+
+    // 成功路径
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+    assert_eq!(count_terminal(&events), 1, "success: exactly one terminal");
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+
+    // 失败路径
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("f", Box::new(FailingNode));
+    builder.add_edge(START_NODE, HashSet::from(["f".to_string()]));
+    builder.add_edge("f", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+    assert_eq!(count_terminal(&events), 1, "failure: exactly one terminal");
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowError { .. })));
+    Ok(())
+}
