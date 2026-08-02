@@ -16,6 +16,7 @@
 - **🏗️ 宣言的グラフ構築**: 直感的なビルダーパターンでワークフローを定義
 - **⚡ 並列実行**: 依存関係が許す場合、複数のノードを同時に実行可能
 - **🔀 条件付きルーティング**: 実行時の状態条件に基づいて動的に経路を選択
+- **📡 ストリーミング実行**: リアルタイムでプッシュ型の `StreamEvent` ストリームによりワークフローの進行を観察
 - **💾 状態管理**: JSONベースの組み込み状態永続化と完全な型安全性
 - **🔌 拡張可能なアーキテクチャ**: トレイトによるカスタムノード実装
 - **✅ 包括的な検証**: 実行前のグラフ構造検証でランタイムエラーを防止
@@ -27,7 +28,7 @@
 
 ```toml
 [dependencies]
-langgraph4rust = "0.1.1"
+langgraph4rust = "0.2.0"
 ```
 
 ## 🚀 クイックスタート
@@ -112,15 +113,15 @@ impl AgentNode<DefaultMemoryState> for MyNode {
 // 静的エッジ
 builder.add_edge("node_a", HashSet::from(["node_b".to_string()]));
 
-// 条件ルーティング（conditional_routing例を参照）
-builder.add_conditional_edges(
+// 条件エッジ：ルーターは状態を調べて次のノード名を返す*同期*クロージャです。
+// 複数のルーターを指定でき、返されたターゲットは次のステップへの和集合となります。
+builder.add_conditional_edge(
     "decision_node",
-    |state| async move { /* ルーティングロジック */ },
-    HashMap::from([
-        ("option_a".to_string(), HashSet::from(["node_x".to_string()])),
-        ("option_b".to_string(), HashSet::from(["node_y".to_string()])),
-    ])
-)?;
+    vec![Box::new(|_state: &DefaultMemoryState| {
+        // 状態に基づいて選択したターゲットノード名を返します。
+        "node_x".to_string()
+    })],
+);
 ```
 
 ### 状態 💾
@@ -136,6 +137,58 @@ state.set("key", "value").await?;
 // 型指定された値を取得
 let value: String = state.get("key").await?.unwrap();
 ```
+
+### ストリーミング実行 📡
+
+`invoke()` に加えて、コンパイル済みグラフは**プッシュ型のイベントストリーム**として実行できます。進捗報告、ロギング、ライブ UI に最適です：
+
+```rust
+use langgraph4rust::*;
+use std::collections::HashSet;
+use std::sync::Arc;
+use async_trait::async_trait;
+
+#[derive(Clone)]
+struct WorkNode;
+
+#[async_trait]
+impl AgentNode<DefaultMemoryState> for WorkNode {
+    async fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+        state.set("done", true).await?;
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("work", Box::new(WorkNode));
+    builder.add_edge(START_NODE, HashSet::from(["work".to_string()]));
+    builder.add_edge("work", HashSet::from([END_NODE.to_string()]));
+
+    let graph = Arc::new(builder.compile()?);
+    let state = Arc::new(DefaultMemoryState::new());
+
+    // `stream` は Arc<StateGraph> を消費し、`StreamEvent` を生成します。
+    let mut events = graph.stream(state);
+    while let Some(event) = events.next().await {
+        match event {
+            StreamEvent::WorkflowStarted => println!("▶ ワークフロー開始"),
+            StreamEvent::NodeFinished { name, elapsed, .. } => {
+                println!("✓ ノード '{name}' 完了（{elapsed:?}）")
+            }
+            StreamEvent::WorkflowFinished { total_steps, elapsed, .. } => {
+                println!("■ 完了：全 {total_steps} ステップ（{elapsed:?}）")
+            }
+            StreamEvent::WorkflowError { error, .. } => eprintln!("✗ 失敗：{error}"),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+```
+
+ストリームは常に `WorkflowFinished`（成功）または `WorkflowError`（失敗）のいずれかを最後のイベントとして終了します — エラーは戻り値ではなく*イベント*として配信されます。
 
 ## 📚 例
 
@@ -173,7 +226,7 @@ cargo run --example <example_name>
 │         ▲                         │        │
 │         └──────────(state)────────┘        │
 └─────────────────────────────────────────────┘
-                   │ invoke()
+                   │ invoke() / stream()
                    ▼
 ┌─────────────────────────────────────────────┐
 │          DefaultMemoryState                 │
@@ -191,6 +244,7 @@ cargo run --example <example_name>
 - **[`AgentState`](src/core/agent_state.rs)**: 状態管理バックエンド用トレイト
 - **[`DefaultMemoryState`](src/core/agent_state.rs)**: 組み込みJSONベース状態実装
 - **[`LangGraphError`](src/core/error.rs)**: ライブラリのエラー型
+- **[`StreamEvent`](src/core/state_graph_stream.rs)**: ストリーミング API が発するイベント
 
 ### 主要メソッド
 
@@ -199,11 +253,12 @@ cargo run --example <example_name>
 StateGraphBuilder::new()                          // 新規ビルダー作成
 builder.add_node(name, node)                      // ノード追加
 builder.add_edge(from, to)                        // 静的エッジ追加
-builder.add_conditional_edges(from, router, map)  // 条件エッジ追加
+builder.add_conditional_edge(from, routers)       // 条件エッジ追加（routers: Vec<Box<dyn Fn(&S) -> String>>）
 builder.compile()                                 // 検証＆グラフ構築
 
 // ワークフロー実行
-graph.invoke(initial_state)                       // ワークフロー実行
+graph.invoke(initial_state)                       // ワークフローを完了まで実行
+graph.stream(initial_state)                       // プッシュ型 StreamEvent ストリームで実行
 
 // 状態管理
 state.set(key, value).await                       // 値保存
