@@ -663,3 +663,443 @@ async fn test_workflow_error_is_terminal() -> Result<(), LangGraphError> {
     )));
     Ok(())
 }
+
+// ─── 15. 菱形拓扑：fan-out 后 fan-in ────────────────────────────────────────
+
+/// start → {a, b} → merge → end：并行分支汇聚到单一节点
+#[tokio::test]
+async fn test_diamond_fan_out_fan_in() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_node("b", Box::new(CounterNode));
+    builder.add_node("merge", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string(), "b".to_string()]));
+    builder.add_edge("a", HashSet::from(["merge".to_string()]));
+    builder.add_edge("b", HashSet::from(["merge".to_string()]));
+    builder.add_edge("merge", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
+
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    // a, b, merge 各执行一次
+    let count: i32 = state.get("count").await?.unwrap_or(0);
+    assert_eq!(count, 3, "a + b + merge should run 3 times");
+    // merge 只应启动一次（fan-in 去重）
+    let merge_starts = events
+        .iter()
+        .filter(|e| matches!(e, StreamEvent::NodeStarted { name, .. } if name == "merge"))
+        .count();
+    assert_eq!(merge_starts, 1, "merge should run exactly once");
+    Ok(())
+}
+
+// ─── 16. 并行节点全部成功 ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_parallel_all_nodes_finish_successfully() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_node("b", Box::new(CounterNode));
+    builder.add_node("c", Box::new(CounterNode));
+    builder.add_edge(
+        START_NODE,
+        HashSet::from(["a".to_string(), "b".to_string(), "c".to_string()]),
+    );
+    builder.add_edge("a", HashSet::from([END_NODE.to_string()]));
+    builder.add_edge("b", HashSet::from([END_NODE.to_string()]));
+    builder.add_edge("c", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
+
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    let finished = events
+        .iter()
+        .filter(|e| matches!(e, StreamEvent::NodeFinished { .. }))
+        .count();
+    assert_eq!(finished, 3, "all 3 nodes should finish");
+    let count: i32 = state.get("count").await?.unwrap_or(0);
+    assert_eq!(count, 3);
+    Ok(())
+}
+
+// ─── 17. WorkflowError 携带状态快照（部分更新保留）─────────────────────
+
+#[tokio::test]
+async fn test_workflow_error_carries_state_snapshot() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("ok", Box::new(CounterNode));
+    builder.add_node("fail", Box::new(FailingNode));
+    builder.add_edge(START_NODE, HashSet::from(["ok".to_string()]));
+    builder.add_edge("ok", HashSet::from(["fail".to_string()]));
+    builder.add_edge("fail", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    if let Some(StreamEvent::WorkflowError { state, .. }) = events.last() {
+        // ok 节点已将 count 置 1，错误快照应保留该部分更新
+        let count: i32 = state.get("count").await?.unwrap_or(0);
+        assert_eq!(count, 1, "error snapshot should keep partial update");
+    } else {
+        panic!("last event should be WorkflowError");
+    }
+    Ok(())
+}
+
+// ─── 18. WorkflowFinished.state 与输入是同一个 Arc ─────────────────────────
+
+#[tokio::test]
+async fn test_workflow_finished_state_is_same_arc() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let events = collect_events(graph, Arc::clone(&state)).await;
+
+    if let Some(StreamEvent::WorkflowFinished { state: final_state, .. }) = events.last() {
+        assert!(
+            Arc::ptr_eq(&state, final_state),
+            "finished state should be the same Arc as input"
+        );
+    } else {
+        panic!("last event should be WorkflowFinished");
+    }
+    Ok(())
+}
+
+// ─── 19. 图复用：同一编译图顺序多次 stream ────────────────────────────────
+
+#[tokio::test]
+async fn test_graph_reuse_sequential_streams() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    // 两次独立执行，状态互不干扰
+    for _ in 0..2 {
+        let state = Arc::new(DefaultMemoryState::new());
+        let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
+        assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+        let count: i32 = state.get("count").await?.unwrap_or(0);
+        assert_eq!(count, 1, "each run starts from fresh state");
+    }
+    Ok(())
+}
+
+// ─── 20. 并发流：同一 Arc 图同时跑多个 stream ──────────────────────────────
+
+#[tokio::test]
+async fn test_concurrent_streams_same_graph() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_node("b", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from(["b".to_string()]));
+    builder.add_edge("b", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let (e1, e2, e3) = tokio::join!(
+        collect_events(Arc::clone(&graph), Arc::new(DefaultMemoryState::new())),
+        collect_events(Arc::clone(&graph), Arc::new(DefaultMemoryState::new())),
+        collect_events(Arc::clone(&graph), Arc::new(DefaultMemoryState::new())),
+    );
+    for events in [&e1, &e2, &e3] {
+        assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    }
+    Ok(())
+}
+
+// ─── 21. 多 router 条件边：下一跳为各 router 结果并集 ─────────────────────
+
+/// 单一条件边含两个 router（分别返回 t1 / t2），下一步应同时执行 t1 和 t2
+#[tokio::test]
+async fn test_multiple_conditional_routers_merge() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("split", Box::new(CounterNode));
+    builder.add_node("t1", Box::new(CounterNode));
+    builder.add_node("t2", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["split".to_string()]));
+    builder.add_conditional_edge(
+        "split",
+        vec![
+            Box::new(|_state: &DefaultMemoryState| "t1".to_string()),
+            Box::new(|_state: &DefaultMemoryState| "t2".to_string()),
+        ],
+    );
+    builder.add_edge("t1", HashSet::from([END_NODE.to_string()]));
+    builder.add_edge("t2", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
+
+    // 从 split 出发的 RoutingDecision 应同时包含 t1 和 t2
+    let routing = events.iter().find(|e| matches!(
+        e,
+        StreamEvent::RoutingDecision { from_nodes, .. } if from_nodes.contains(&"split".to_string())
+    ));
+    if let Some(StreamEvent::RoutingDecision { to_nodes, .. }) = routing {
+        assert!(to_nodes.contains(&"t1".to_string()), "missing t1");
+        assert!(to_nodes.contains(&"t2".to_string()), "missing t2");
+    } else {
+        panic!("should have RoutingDecision from split");
+    }
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    // t1, t2 各执行一次（split 也执行）→ count = 3
+    let count: i32 = state.get("count").await?.unwrap_or(0);
+    assert_eq!(count, 3);
+    Ok(())
+}
+
+/// 补充：验证器禁止同一节点同时拥有静态边与条件边（compile 报错）
+#[test]
+fn test_node_cannot_have_both_static_and_conditional_edges() {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("split", Box::new(CounterNode));
+    builder.add_node("t", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["split".to_string()]));
+    builder.add_edge("split", HashSet::from(["t".to_string()]));
+    builder.add_conditional_edge(
+        "split",
+        vec![Box::new(|_state: &DefaultMemoryState| "t".to_string())],
+    );
+    builder.add_edge("t", HashSet::from([END_NODE.to_string()]));
+
+    let result = builder.compile();
+    assert!(result.is_err(), "compile should reject mixed static + conditional edges");
+    let err = result.err().unwrap();
+    assert!(matches!(err, LangGraphError::GraphError(_)));
+    assert!(err.to_string().contains("both static edges and conditional edges"));
+}
+
+// ─── 22. 条件边直接路由到 END ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_conditional_edge_directly_to_end() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("router", Box::new(RouterNode));
+    builder.add_edge(START_NODE, HashSet::from(["router".to_string()]));
+    builder.add_conditional_edge(
+        "router",
+        vec![Box::new(|_state: &DefaultMemoryState| END_NODE.to_string())],
+    );
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    // router 后直接结束，不应有其他节点启动
+    let started = events
+        .iter()
+        .filter(|e| matches!(e, StreamEvent::NodeStarted { .. }))
+        .count();
+    assert_eq!(started, 1, "only router should start");
+    Ok(())
+}
+
+// ─── 23. 大扇出：触发有界通道背压 ───────────────────────────────────────────
+
+/// 20 个并行节点，单步事件数(StepStarted+20*Started+20*Finished+Routing=42)超过通道容量32，
+/// 验证背压下不死锁、全部完成
+#[tokio::test]
+async fn test_large_fan_out_backpressure() -> Result<(), LangGraphError> {
+    const N: usize = 20;
+    let mut builder = StateGraphBuilder::new();
+    let names: Vec<String> = (0..N).map(|i| format!("p{}", i)).collect();
+    for name in &names {
+        builder.add_node(name, Box::new(CounterNode));
+    }
+    builder.add_edge(START_NODE, names.iter().cloned().collect());
+    for name in &names {
+        builder.add_edge(name, HashSet::from([END_NODE.to_string()]));
+    }
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
+
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    let finished = events
+        .iter()
+        .filter(|e| matches!(e, StreamEvent::NodeFinished { .. }))
+        .count();
+    assert_eq!(finished, N, "all {} nodes should finish", N);
+    let count: i32 = state.get("count").await?.unwrap_or(0);
+    assert_eq!(count, N as i32);
+    Ok(())
+}
+
+// ─── 24. 自循环 + max_steps ─────────────────────────────────────────────────
+
+/// a → a（自环），永远到不了 end，max_steps=3 截断
+#[tokio::test]
+async fn test_self_loop_max_steps() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.set_max_steps(3);
+    builder.add_node("a", Box::new(CounterNode));
+    builder.add_edge(START_NODE, HashSet::from(["a".to_string()]));
+    builder.add_edge("a", HashSet::from(["a".to_string()])); // 自环
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    if let Some(StreamEvent::WorkflowError { error, .. }) = events.last() {
+        assert!(
+            error.to_string().contains("max_steps"),
+            "should report max_steps"
+        );
+    } else {
+        panic!("last event should be WorkflowError");
+    }
+    assert!(!events.iter().any(|e| matches!(e, StreamEvent::WorkflowFinished { .. })));
+    Ok(())
+}
+
+// ─── 25. 失败节点仍发射 NodeFinished ────────────────────────────────────────
+
+/// run_node_with_events 在 apply 返回后无条件发 NodeFinished，故失败节点也有该事件
+#[tokio::test]
+async fn test_failing_node_still_emits_node_finished() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("fail", Box::new(FailingNode));
+    builder.add_edge(START_NODE, HashSet::from(["fail".to_string()]));
+    builder.add_edge("fail", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
+
+    assert!(events.iter().any(|e| matches!(
+        e,
+        StreamEvent::NodeStarted { name, .. } if name == "fail"
+    )));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        StreamEvent::NodeFinished { name, .. } if name == "fail"
+    )), "failing node should still emit NodeFinished");
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowError { .. })));
+    Ok(())
+}
+
+// ─── 26. 状态依赖的条件路由（自定义同步可读状态）─────────────────────
+
+/// 同步可读的状态实现：router 是同步 Fn，需能同步读取节点异步写入的路由值
+#[derive(Clone)]
+struct SyncRouteState {
+    data: Arc<std::sync::Mutex<std::collections::HashMap<String, serde_json::Value>>>,
+}
+
+impl SyncRouteState {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+    /// 同步读取字符串值（供同步 router 使用）
+    fn get_sync(&self, key: &str) -> Option<String> {
+        self.data
+            .lock()
+            .unwrap()
+            .get(key)
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+    }
+}
+
+#[langgraph4rust::async_trait]
+impl AgentState for SyncRouteState {
+    async fn get<T: serde::de::DeserializeOwned + Send + Sync>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>, LangGraphError> {
+        let guard = self.data.lock().unwrap();
+        Ok(guard.get(key).and_then(|v| serde_json::from_value(v.clone()).ok()))
+    }
+    async fn set<T: serde::Serialize + Send + Sync>(
+        &self,
+        key: &str,
+        value: T,
+    ) -> Result<bool, LangGraphError> {
+        let v = serde_json::to_value(value).map_err(|e| LangGraphError::StateError(e.to_string()))?;
+        self.data.lock().unwrap().insert(key.to_string(), v);
+        Ok(true)
+    }
+}
+
+/// 写入路由值的节点
+#[derive(Clone)]
+struct SetRouteNode {
+    target: String,
+}
+
+#[langgraph4rust::async_trait]
+impl AgentNode<SyncRouteState> for SetRouteNode {
+    async fn apply(&self, state: Arc<SyncRouteState>) -> Result<(), LangGraphError> {
+        state.set("route", self.target.clone()).await?;
+        Ok(())
+    }
+}
+
+/// 打标记节点：访问时在 state 写入 key=true
+#[derive(Clone)]
+struct MarkNode {
+    key: String,
+}
+
+#[langgraph4rust::async_trait]
+impl AgentNode<SyncRouteState> for MarkNode {
+    async fn apply(&self, state: Arc<SyncRouteState>) -> Result<(), LangGraphError> {
+        state.set(&self.key, true).await?;
+        Ok(())
+    }
+}
+
+/// decide 节点将 route 置为 "right"，条件边同步读取后路由到 right 分支
+#[tokio::test]
+async fn test_state_dependent_conditional_routing() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::<SyncRouteState>::new();
+    builder.add_node(
+        "decide",
+        Box::new(SetRouteNode {
+            target: "right".to_string(),
+        }),
+    );
+    builder.add_node(
+        "left",
+        Box::new(MarkNode {
+            key: "left_visited".to_string(),
+        }),
+    );
+    builder.add_node(
+        "right",
+        Box::new(MarkNode {
+            key: "right_visited".to_string(),
+        }),
+    );
+    builder.add_edge(START_NODE, HashSet::from(["decide".to_string()]));
+    builder.add_conditional_edge(
+        "decide",
+        vec![Box::new(|state: &SyncRouteState| {
+            state.get_sync("route").unwrap_or_else(|| "left".to_string())
+        })],
+    );
+    builder.add_edge("left", HashSet::from([END_NODE.to_string()]));
+    builder.add_edge("right", HashSet::from([END_NODE.to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(SyncRouteState::new());
+    let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
+
+    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    let right: Option<bool> = state.get("right_visited").await?;
+    let left: Option<bool> = state.get("left_visited").await?;
+    assert_eq!(right, Some(true), "right branch should be visited");
+    assert_eq!(left, None, "left branch should NOT be visited");
+    Ok(())
+}
