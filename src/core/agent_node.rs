@@ -49,7 +49,7 @@ use std::sync::Arc;
 /// level in the graph). Ensure that your implementation is thread-safe when accessing
 /// shared resources beyond the provided state.
 #[async_trait]
-pub trait AgentNode<S: AgentState + Send + Sync> {
+pub trait AgentNode<S: AgentState + Send + Sync>: Send + Sync {
     /// Execute the node's logic against the provided state.
     ///
     /// This method is called when the node is activated during graph execution.

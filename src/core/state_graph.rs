@@ -97,11 +97,11 @@ pub struct StateGraph<S: AgentState + Send + Sync> {
     /// Conditional edges: source node -> list of router functions
     conditional_edges: HashMap<String, Vec<RouterFn<S>>>,
     /// Entry point node name
-    start_node: String,
+    pub(crate) start_node: String,
     /// Termination node name
-    end_node: String,
+    pub(crate) end_node: String,
     /// Maximum steps before forced termination (safety limit)
-    max_steps: usize,
+    pub(crate) max_steps: usize,
 }
 
 impl<S: AgentState + Send + Sync> StateGraph<S> {
@@ -324,13 +324,13 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
                 break;
             }
             step_count += 1;
-            if self.is_end_node(current.clone())? {
+            if self.is_end_node(&current) {
                 current.remove(&self.end_node);
             }
             if current.is_empty() {
                 break;
             }
-            if !self.is_start_node(current.clone())? {
+            if !self.is_start_node(&current) {
                 let nodes = self.get_node_by_keys(&current)?;
                 if nodes.is_empty() {
                     return Err(LangGraphError::NotFound(format!(
@@ -379,7 +379,7 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
     ///
     /// - `Ok(Vec<&Box<dyn AgentNode<S>>>)` - Vector of node references
     /// - `Err(LangGraphError::NotFound)` - If any node name doesn't exist
-    fn get_node_by_keys(
+    pub(crate) fn get_node_by_keys(
         &self,
         keys: &HashSet<String>,
     ) -> Result<Vec<&dyn AgentNode<S>>, LangGraphError> {
@@ -392,25 +392,19 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
     }
 
     /// Check if any of the provided keys matches the start node.
-    fn is_start_node(&self, keys: HashSet<String>) -> Result<bool, LangGraphError> {
+    pub(crate) fn is_start_node(&self, keys: &HashSet<String>) -> bool {
         if keys.is_empty() {
-            return Ok(false);
+            return false;
         }
-        if keys.contains(&self.start_node) {
-            return Ok(true);
-        }
-        Ok(false)
+        keys.contains(&self.start_node)
     }
 
     /// Check if any of the provided keys matches the end node.
-    fn is_end_node(&self, keys: HashSet<String>) -> Result<bool, LangGraphError> {
+    pub(crate) fn is_end_node(&self, keys: &HashSet<String>) -> bool {
         if keys.is_empty() {
-            return Ok(false);
+            return false;
         }
-        if keys.contains(&self.end_node) {
-            return Ok(true);
-        }
-        Ok(false)
+        keys.contains(&self.end_node)
     }
 
     /// Determine the next set of node keys based on current position and state.
@@ -426,7 +420,7 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
     /// # Returns
     ///
     /// Set of node names for the next execution step
-    fn get_next_node_key(
+    pub(crate) fn get_next_node_key(
         &self,
         keys: &HashSet<String>,
         state: &S,
@@ -468,7 +462,7 @@ impl<S: AgentState + Send + Sync> StateGraph<S> {
     ///
     /// - `Ok(())`: All nodes executed successfully
     /// - `Err(LangGraphError)`: First error from any node
-    async fn batch_apply(
+    pub(crate) async fn batch_apply(
         &self,
         nodes: Vec<&dyn AgentNode<S>>,
         state: Arc<S>,

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use langgraph4rust::{
-    AgentNode, AgentState, DefaultMemoryState, LangGraphError, StateGraphBuilder,
+    AgentNode, AgentState, DefaultMemoryState, LangGraphError, StateGraphBuilder, StreamEvent,
+    StreamExt,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -2761,6 +2762,92 @@ async fn test_dynamic_routing_across_steps() -> Result<(), LangGraphError> {
     // 验证计数器反映了路径选择（至少有一个path被执行）
     let count: Option<i32> = state.get("count").await?;
     assert!(count.unwrap_or(0) >= 0, "Count should be non-negative");
+
+    Ok(())
+}
+
+/// 测试场景：流式执行多节点线性工作流
+/// 验证事件按序产出、事件总数较多（>16），最终以 WorkflowFinished 收尾
+#[tokio::test]
+async fn test_stream_multi_step_events() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    for name in ["n1", "n2", "n3", "n4", "n5"] {
+        builder.add_node(name, Box::new(CounterNode));
+    }
+    builder.add_edge("__start__", HashSet::from(["n1".to_string()]));
+    builder.add_edge("n1", HashSet::from(["n2".to_string()]));
+    builder.add_edge("n2", HashSet::from(["n3".to_string()]));
+    builder.add_edge("n3", HashSet::from(["n4".to_string()]));
+    builder.add_edge("n4", HashSet::from(["n5".to_string()]));
+    builder.add_edge("n5", HashSet::from(["__end__".to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let mut rx = graph.stream(Arc::clone(&state));
+
+    let mut events = Vec::new();
+    while let Some(event) = rx.next().await {
+        events.push(event);
+    }
+
+    // 首事件为 WorkflowStarted，末事件为 WorkflowFinished
+    assert!(matches!(
+        events.first(),
+        Some(StreamEvent::WorkflowStarted)
+    ));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
+
+    // 5 个节点：1 + 5*(StepStarted+NodeStarted+NodeFinished+RoutingDecision) + 1 = 22 > 16
+    assert!(
+        events.len() >= 22,
+        "expected >= 22 events, got {}",
+        events.len()
+    );
+
+    // 应包含路由决策事件
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::RoutingDecision { .. })));
+
+    // 状态被累计更新 5 次
+    let count: i32 = state.get("count").await?.unwrap_or(0);
+    assert_eq!(count, 5);
+
+    Ok(())
+}
+
+/// 测试场景：流式执行遇到节点错误
+/// 验证错误以 WorkflowError 事件下发，且不再产出 WorkflowFinished
+#[tokio::test]
+async fn test_stream_error_path() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("fail", Box::new(FailingNode));
+    builder.add_edge("__start__", HashSet::from(["fail".to_string()]));
+    builder.add_edge("fail", HashSet::from(["__end__".to_string()]));
+    let graph = Arc::new(builder.compile()?);
+
+    let state = Arc::new(DefaultMemoryState::new());
+    let mut rx = graph.stream(state);
+
+    let mut events = Vec::new();
+    while let Some(event) = rx.next().await {
+        events.push(event);
+    }
+
+    assert!(matches!(
+        events.first(),
+        Some(StreamEvent::WorkflowStarted)
+    ));
+    // 应出现 WorkflowError，且不应出现 WorkflowFinished
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::WorkflowError { .. })));
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::WorkflowFinished { .. })));
 
     Ok(())
 }
