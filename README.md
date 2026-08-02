@@ -16,6 +16,7 @@
 - **🏗️ Declarative Graph Building**: Define workflows using an intuitive builder pattern
 - **⚡ Parallel Execution**: Multiple nodes can execute simultaneously when dependencies allow
 - **🔀 Conditional Routing**: Dynamic path selection based on runtime state conditions
+- **📡 Streaming Execution**: Real-time, push-based `StreamEvent` stream for observing workflow progress
 - **💾 State Management**: Built-in JSON-based state persistence with full type safety
 - **🔌 Extensible Architecture**: Custom node implementations via traits
 - **✅ Comprehensive Validation**: Graph structure validation before execution prevents runtime errors
@@ -27,7 +28,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-langgraph4rust = "0.1.1"
+langgraph4rust = "0.2.0"
 ```
 
 ## 🚀 Quick Start
@@ -112,15 +113,16 @@ Edges define the control flow between nodes:
 // Static edge
 builder.add_edge("node_a", HashSet::from(["node_b".to_string()]));
 
-// Conditional routing (see conditional_routing example)
-builder.add_conditional_edges(
+// Conditional edge: routers are *synchronous* closures that inspect the state
+// and return the name of the next node. Multiple routers may be supplied;
+// their returned targets are unioned into the next step.
+builder.add_conditional_edge(
     "decision_node",
-    |state| async move { /* routing logic */ },
-    HashMap::from([
-        ("option_a".to_string(), HashSet::from(["node_x".to_string()])),
-        ("option_b".to_string(), HashSet::from(["node_y".to_string()])),
-    ])
-)?;
+    vec![Box::new(|_state: &DefaultMemoryState| {
+        // Return the chosen target node name based on the state.
+        "node_x".to_string()
+    })],
+);
 ```
 
 ### State 💾
@@ -136,6 +138,61 @@ state.set("key", "value").await?;
 // Get typed values
 let value: String = state.get("key").await?.unwrap();
 ```
+
+### Streaming Execution 📡
+
+In addition to `invoke()`, a compiled graph can be executed as a **push-based
+event stream**. This is ideal for progress reporting, logging, and live UIs:
+
+```rust
+use langgraph4rust::*;
+use std::collections::HashSet;
+use std::sync::Arc;
+use async_trait::async_trait;
+
+#[derive(Clone)]
+struct WorkNode;
+
+#[async_trait]
+impl AgentNode<DefaultMemoryState> for WorkNode {
+    async fn apply(&self, state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+        state.set("done", true).await?;
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), LangGraphError> {
+    let mut builder = StateGraphBuilder::new();
+    builder.add_node("work", Box::new(WorkNode));
+    builder.add_edge(START_NODE, HashSet::from(["work".to_string()]));
+    builder.add_edge("work", HashSet::from([END_NODE.to_string()]));
+
+    let graph = Arc::new(builder.compile()?);
+    let state = Arc::new(DefaultMemoryState::new());
+
+    // `stream` consumes the Arc<StateGraph> and yields `StreamEvent`s.
+    let mut events = graph.stream(state);
+    while let Some(event) = events.next().await {
+        match event {
+            StreamEvent::WorkflowStarted => println!("▶ workflow started"),
+            StreamEvent::NodeFinished { name, elapsed, .. } => {
+                println!("✓ node '{name}' finished in {elapsed:?}")
+            }
+            StreamEvent::WorkflowFinished { total_steps, elapsed, .. } => {
+                println!("■ done: {total_steps} steps in {elapsed:?}")
+            }
+            StreamEvent::WorkflowError { error, .. } => eprintln!("✗ failed: {error}"),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+```
+
+The stream always terminates with either `WorkflowFinished` (success) or
+`WorkflowError` (failure) as its final event — errors are delivered *as events*
+rather than via the return value.
 
 ## 📚 Examples
 
@@ -173,7 +230,7 @@ cargo run --example <example_name>
 │         ▲                         │        │
 │         └──────────(state)────────┘        │
 └─────────────────────────────────────────────┘
-                   │ invoke()
+                   │ invoke() / stream()
                    ▼
 ┌─────────────────────────────────────────────┐
 │          DefaultMemoryState                 │
@@ -191,6 +248,7 @@ cargo run --example <example_name>
 - **[`AgentState`](src/core/agent_state.rs)**: Trait for state management backends
 - **[`DefaultMemoryState`](src/core/agent_state.rs)**: Built-in JSON-based state implementation
 - **[`LangGraphError`](src/core/error.rs)**: Error type for the library
+- **[`StreamEvent`](src/core/state_graph_stream.rs)**: Events emitted by the streaming API
 
 ### Key Methods
 
@@ -199,11 +257,12 @@ cargo run --example <example_name>
 StateGraphBuilder::new()                          // Create new builder
 builder.add_node(name, node)                      // Add a node
 builder.add_edge(from, to)                        // Add static edge
-builder.add_conditional_edges(from, router, map)  // Add conditional edge
+builder.add_conditional_edge(from, routers)       // Add conditional edge (routers: Vec<Box<dyn Fn(&S) -> String>>)
 builder.compile()                                 // Validate & build graph
 
 // Executing workflows
-graph.invoke(initial_state)                       // Run the workflow
+graph.invoke(initial_state)                       // Run the workflow to completion
+graph.stream(initial_state)                       // Run with a push-based StreamEvent stream
 
 // Managing state
 state.set(key, value).await                       // Store value

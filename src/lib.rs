@@ -11,6 +11,7 @@
 //! - **Conditional Routing**: Dynamic path selection based on state conditions
 //! - **State Management**: Built-in JSON-based state persistence with type safety
 //! - **Extensible Architecture**: Custom node implementations via traits
+//! - **Streaming Execution**: Real-time push-based event stream via [`StateGraph::stream`]
 //! - **Validation**: Comprehensive graph validation before execution
 //!
 //! ## Quick Start
@@ -64,6 +65,49 @@
 //! ### State
 //! The state is shared across all nodes and persists throughout the workflow execution.
 //! By default, [`DefaultMemoryState`] provides JSON-based storage.
+//!
+//! ### Streaming
+//! Besides [`StateGraph::invoke`], a compiled graph can be executed as a push-based
+//! event stream via [`StateGraph::stream`], yielding [`StreamEvent`] values in real
+//! time. The stream always ends with either `WorkflowFinished` (success) or
+//! `WorkflowError` (failure):
+//!
+//! ```rust
+//! use langgraph4rust::*;
+//! use std::collections::HashSet;
+//! use std::sync::Arc;
+//! use async_trait::async_trait;
+//!
+//! #[derive(Clone)]
+//! struct Noop;
+//!
+//! #[async_trait]
+//! impl AgentNode<DefaultMemoryState> for Noop {
+//!     async fn apply(&self, _state: Arc<DefaultMemoryState>) -> Result<(), LangGraphError> {
+//!         Ok(())
+//!     }
+//! }
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), LangGraphError> {
+//!     let mut builder = StateGraphBuilder::new();
+//!     builder.add_node("noop", Box::new(Noop));
+//!     builder.add_edge(START_NODE, HashSet::from(["noop".to_string()]));
+//!     builder.add_edge("noop", HashSet::from([END_NODE.to_string()]));
+//!
+//!     let graph = Arc::new(builder.compile()?);
+//!     let mut events = graph.stream(Arc::new(DefaultMemoryState::new()));
+//!
+//!     let mut finished = false;
+//!     while let Some(event) = events.next().await {
+//!         if matches!(event, StreamEvent::WorkflowFinished { .. }) {
+//!             finished = true;
+//!         }
+//!     }
+//!     assert!(finished);
+//!     Ok(())
+//! }
+//! ```
 //!
 //! ## Examples
 //!

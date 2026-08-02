@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-02
+
+### Added
+- **Push-based streaming execution**: `StateGraph::stream()` returns a
+  `ReceiverStream<StreamEvent<S>>` driven by a background Tokio task over a
+  bounded channel, enabling real-time observation of workflow progress.
+- **`StreamEvent<S>` enum** with fine-grained lifecycle events:
+  `WorkflowStarted`, `StepStarted`, `NodeStarted`, `NodeFinished` (with
+  per-node `elapsed`), `RoutingDecision` (exposes conditional routing
+  decisions), `WorkflowFinished` (with `total_steps` / `elapsed`), and
+  `WorkflowError`.
+- Re-exported `Stream` / `StreamExt` (from `futures`) and `StreamEvent` at the
+  crate root for convenient consumption.
+- Comprehensive stream test suite (`tests/stream_test.rs`, 57 scenarios)
+  covering event ordering, step indexing, parallelism, conditional routing,
+  error propagation, backpressure, and `max_steps` boundaries.
+
+### Changed
+- **`max_steps` exhaustion is now an error**: when the step budget runs out
+  before reaching the end node (e.g. a cycle), the stream emits
+  `WorkflowError(GraphError)` instead of silently reporting success.
+- `is_start_node` / `is_end_node` now borrow `&HashSet<String>` (removed
+  redundant clones in the hot execution path).
+
+### Documented
+- `compile()` now documents the edge-type mutual-exclusivity rule: a node
+  cannot have both static and conditional edges; use a single conditional edge
+  with multiple routers (results are unioned) to merge routing targets.
+
+### Dependencies
+- Added `tokio-stream` (with the `sync` feature) for the `ReceiverStream`
+  adapter, replacing the previous `async-stream` based approach.
+
 ## [0.1.1] - 2026-07-29
 
 ### Fixed
@@ -47,6 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README with quick start guide and examples
 - Inline code examples throughout the codebase
 
-[Unreleased]: https://github.com/langGraph4rust/langgraph4rust/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/langGraph4rust/langgraph4rust/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/langGraph4rust/langgraph4rust/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/langGraph4rust/langgraph4rust/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/langGraph4rust/langgraph4rust/releases/tag/v0.1.0
