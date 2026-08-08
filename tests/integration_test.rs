@@ -2791,10 +2791,7 @@ async fn test_stream_multi_step_events() -> Result<(), LangGraphError> {
     }
 
     // 首事件为 WorkflowStarted，末事件为 WorkflowFinished
-    assert!(matches!(
-        events.first(),
-        Some(StreamEvent::WorkflowStarted)
-    ));
+    assert!(matches!(events.first(), Some(StreamEvent::WorkflowStarted)));
     assert!(matches!(
         events.last(),
         Some(StreamEvent::WorkflowFinished { .. })
@@ -2808,9 +2805,11 @@ async fn test_stream_multi_step_events() -> Result<(), LangGraphError> {
     );
 
     // 应包含路由决策事件
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, StreamEvent::RoutingDecision { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::RoutingDecision { .. }))
+    );
 
     // 状态被累计更新 5 次
     let count: i32 = state.get("count").await?.unwrap_or(0);
@@ -2837,17 +2836,18 @@ async fn test_stream_error_path() -> Result<(), LangGraphError> {
         events.push(event);
     }
 
-    assert!(matches!(
-        events.first(),
-        Some(StreamEvent::WorkflowStarted)
-    ));
+    assert!(matches!(events.first(), Some(StreamEvent::WorkflowStarted)));
     // 应出现 WorkflowError，且不应出现 WorkflowFinished
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, StreamEvent::WorkflowError { .. })));
-    assert!(!events
-        .iter()
-        .any(|e| matches!(e, StreamEvent::WorkflowFinished { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::WorkflowError { .. }))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::WorkflowFinished { .. }))
+    );
 
     Ok(())
 }

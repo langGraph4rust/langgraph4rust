@@ -63,7 +63,7 @@ use futures::future::join_all;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::mpsc::{Sender, channel};
 use tokio_stream::wrappers::ReceiverStream;
 
 /// Capacity of the bounded event channel.
@@ -323,16 +323,18 @@ async fn run_driver<S: AgentState + Send + Sync + 'static>(
             }
         }
 
-        let next = match graph.get_next_node_key(&current, state.as_ref()).and_then(|n| {
-            if n.is_empty() {
-                Err(LangGraphError::GraphError(format!(
-                    "Dead-end: nodes {:?} have no outgoing edges",
-                    current
-                )))
-            } else {
-                Ok(n)
-            }
-        }) {
+        let next = match graph
+            .get_next_node_key(&current, state.as_ref())
+            .and_then(|n| {
+                if n.is_empty() {
+                    Err(LangGraphError::GraphError(format!(
+                        "Dead-end: nodes {:?} have no outgoing edges",
+                        current
+                    )))
+                } else {
+                    Ok(n)
+                }
+            }) {
             Ok(n) => n,
             Err(e) => return fail(&tx, &state, step_count, e).await,
         };

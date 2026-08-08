@@ -4,8 +4,8 @@
 //! 事件顺序、步骤编号、并行计时、条件路由、错误路径、max_steps 截断、接收方提前丢弃等。
 
 use langgraph4rust::{
-    AgentNode, AgentState, DefaultMemoryState, LangGraphError, StateGraphBuilder, StreamEvent,
-    StreamExt, END_NODE, START_NODE,
+    AgentNode, AgentState, DefaultMemoryState, END_NODE, LangGraphError, START_NODE,
+    StateGraphBuilder, StreamEvent, StreamExt,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -118,11 +118,17 @@ async fn test_linear_event_sequence() -> Result<(), LangGraphError> {
     // 事件序列：WorkflowStarted, RoutingDecision(start→a), StepStarted(a),
     //          NodeStarted(a), NodeFinished(a), RoutingDecision(a→end), WorkflowFinished
     assert_eq!(events.len(), 7, "expected 7 events, got {}", events.len());
-    assert!(matches!(&events[1], StreamEvent::RoutingDecision { step: 1, .. }));
+    assert!(matches!(
+        &events[1],
+        StreamEvent::RoutingDecision { step: 1, .. }
+    ));
     assert!(matches!(&events[2], StreamEvent::StepStarted { step: 2, nodes } if nodes == &["a"]));
     assert!(matches!(&events[3], StreamEvent::NodeStarted { step: 2, name } if name == "a"));
     assert!(matches!(&events[4], StreamEvent::NodeFinished { step: 2, name, .. } if name == "a"));
-    assert!(matches!(&events[5], StreamEvent::RoutingDecision { step: 2, .. }));
+    assert!(matches!(
+        &events[5],
+        StreamEvent::RoutingDecision { step: 2, .. }
+    ));
 
     // 状态被更新
     let count: i32 = state.get("count").await?.unwrap_or(0);
@@ -165,7 +171,10 @@ async fn test_step_index_consistency() -> Result<(), LangGraphError> {
         }
     }
     // step1: 仅 RoutingDecision(__start__→a) = 1
-    assert_eq!(step1_events, 1, "step 1 should have 1 event (RoutingDecision)");
+    assert_eq!(
+        step1_events, 1,
+        "step 1 should have 1 event (RoutingDecision)"
+    );
     // step2: StepStarted + NodeStarted + NodeFinished + RoutingDecision = 4
     assert_eq!(step2_events, 4, "step 2 should have 4 events");
     // step3: 同上 = 4
@@ -197,7 +206,10 @@ async fn test_workflow_finished_metadata() -> Result<(), LangGraphError> {
     }) = events.last()
     {
         // total_steps 包含 __start__ 步和 __end__ 检测步
-        assert_eq!(*total_steps, 5, "should execute 5 steps (start + 3 nodes + end)");
+        assert_eq!(
+            *total_steps, 5,
+            "should execute 5 steps (start + 3 nodes + end)"
+        );
         assert!(*elapsed > Duration::ZERO, "elapsed should be positive");
         // final_state 与传入的 state 是同一个 Arc
         let count: i32 = final_state.get("count").await?.unwrap_or(0);
@@ -275,7 +287,9 @@ async fn test_parallel_step_started_contains_all_nodes() -> Result<(), LangGraph
 
     let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
 
-    let step_started = events.iter().find(|e| matches!(e, StreamEvent::StepStarted { .. }));
+    let step_started = events
+        .iter()
+        .find(|e| matches!(e, StreamEvent::StepStarted { .. }));
     if let Some(StreamEvent::StepStarted { step, nodes }) = step_started {
         assert_eq!(*step, 2, "real nodes start at step 2");
         assert_eq!(nodes.len(), 3);
@@ -360,9 +374,11 @@ async fn test_node_failure_emits_workflow_error() -> Result<(), LangGraphError> 
         Some(StreamEvent::WorkflowError { .. })
     ));
     // 不应出现 WorkflowFinished
-    assert!(!events
-        .iter()
-        .any(|e| matches!(e, StreamEvent::WorkflowFinished { .. })));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::WorkflowFinished { .. }))
+    );
 
     // 错误内容验证（__start__=step1, ok=step2, fail=step3）
     if let Some(StreamEvent::WorkflowError { step, error, .. }) = events.last() {
@@ -433,9 +449,11 @@ async fn test_max_steps_exhaustion_emits_error() -> Result<(), LangGraphError> {
     }
 
     // 不应出现 WorkflowFinished
-    assert!(!events
-        .iter()
-        .any(|e| matches!(e, StreamEvent::WorkflowFinished { .. })));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::WorkflowFinished { .. }))
+    );
 
     // 状态仍被部分更新（执行了若干步）
     let count: i32 = state.get("count").await?.unwrap_or(0);
@@ -681,7 +699,10 @@ async fn test_diamond_fan_out_fan_in() -> Result<(), LangGraphError> {
     builder.add_node("a", Box::new(CounterNode));
     builder.add_node("b", Box::new(CounterNode));
     builder.add_node("merge", Box::new(CounterNode));
-    builder.add_edge(START_NODE, HashSet::from(["a".to_string(), "b".to_string()]));
+    builder.add_edge(
+        START_NODE,
+        HashSet::from(["a".to_string(), "b".to_string()]),
+    );
     builder.add_edge("a", HashSet::from(["merge".to_string()]));
     builder.add_edge("b", HashSet::from(["merge".to_string()]));
     builder.add_edge("merge", HashSet::from([END_NODE.to_string()]));
@@ -690,7 +711,10 @@ async fn test_diamond_fan_out_fan_in() -> Result<(), LangGraphError> {
     let state = Arc::new(DefaultMemoryState::new());
     let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
 
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
     // a, b, merge 各执行一次
     let count: i32 = state.get("count").await?.unwrap_or(0);
     assert_eq!(count, 3, "a + b + merge should run 3 times");
@@ -723,7 +747,10 @@ async fn test_parallel_all_nodes_finish_successfully() -> Result<(), LangGraphEr
     let state = Arc::new(DefaultMemoryState::new());
     let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
 
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
     let finished = events
         .iter()
         .filter(|e| matches!(e, StreamEvent::NodeFinished { .. }))
@@ -771,7 +798,10 @@ async fn test_workflow_finished_state_is_same_arc() -> Result<(), LangGraphError
     let state = Arc::new(DefaultMemoryState::new());
     let events = collect_events(graph, Arc::clone(&state)).await;
 
-    if let Some(StreamEvent::WorkflowFinished { state: final_state, .. }) = events.last() {
+    if let Some(StreamEvent::WorkflowFinished {
+        state: final_state, ..
+    }) = events.last()
+    {
         assert!(
             Arc::ptr_eq(&state, final_state),
             "finished state should be the same Arc as input"
@@ -796,7 +826,10 @@ async fn test_graph_reuse_sequential_streams() -> Result<(), LangGraphError> {
     for _ in 0..2 {
         let state = Arc::new(DefaultMemoryState::new());
         let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
-        assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::WorkflowFinished { .. })
+        ));
         let count: i32 = state.get("count").await?.unwrap_or(0);
         assert_eq!(count, 1, "each run starts from fresh state");
     }
@@ -821,7 +854,10 @@ async fn test_concurrent_streams_same_graph() -> Result<(), LangGraphError> {
         collect_events(Arc::clone(&graph), Arc::new(DefaultMemoryState::new())),
     );
     for events in [&e1, &e2, &e3] {
-        assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::WorkflowFinished { .. })
+        ));
     }
     Ok(())
 }
@@ -861,7 +897,10 @@ async fn test_multiple_conditional_routers_merge() -> Result<(), LangGraphError>
     } else {
         panic!("should have RoutingDecision from split");
     }
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
     // t1, t2 各执行一次（split 也执行）→ count = 3
     let count: i32 = state.get("count").await?.unwrap_or(0);
     assert_eq!(count, 3);
@@ -883,10 +922,16 @@ fn test_node_cannot_have_both_static_and_conditional_edges() {
     builder.add_edge("t", HashSet::from([END_NODE.to_string()]));
 
     let result = builder.compile();
-    assert!(result.is_err(), "compile should reject mixed static + conditional edges");
+    assert!(
+        result.is_err(),
+        "compile should reject mixed static + conditional edges"
+    );
     let err = result.err().unwrap();
     assert!(matches!(err, LangGraphError::GraphError(_)));
-    assert!(err.to_string().contains("both static edges and conditional edges"));
+    assert!(
+        err.to_string()
+            .contains("both static edges and conditional edges")
+    );
 }
 
 // ─── 22. 条件边直接路由到 END ───────────────────────────────────────────────
@@ -903,7 +948,10 @@ async fn test_conditional_edge_directly_to_end() -> Result<(), LangGraphError> {
     let graph = Arc::new(builder.compile()?);
 
     let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
     // router 后直接结束，不应有其他节点启动
     let started = events
         .iter()
@@ -934,7 +982,10 @@ async fn test_large_fan_out_backpressure() -> Result<(), LangGraphError> {
     let state = Arc::new(DefaultMemoryState::new());
     let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
 
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
     let finished = events
         .iter()
         .filter(|e| matches!(e, StreamEvent::NodeFinished { .. }))
@@ -967,7 +1018,11 @@ async fn test_self_loop_max_steps() -> Result<(), LangGraphError> {
     } else {
         panic!("last event should be WorkflowError");
     }
-    assert!(!events.iter().any(|e| matches!(e, StreamEvent::WorkflowFinished { .. })));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::WorkflowFinished { .. }))
+    );
     Ok(())
 }
 
@@ -988,11 +1043,17 @@ async fn test_failing_node_still_emits_node_finished() -> Result<(), LangGraphEr
         e,
         StreamEvent::NodeStarted { name, .. } if name == "fail"
     )));
-    assert!(events.iter().any(|e| matches!(
-        e,
-        StreamEvent::NodeFinished { name, .. } if name == "fail"
-    )), "failing node should still emit NodeFinished");
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowError { .. })));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            StreamEvent::NodeFinished { name, .. } if name == "fail"
+        )),
+        "failing node should still emit NodeFinished"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowError { .. })
+    ));
     Ok(())
 }
 
@@ -1027,14 +1088,17 @@ impl AgentState for SyncRouteState {
         key: &str,
     ) -> Result<Option<T>, LangGraphError> {
         let guard = self.data.lock().unwrap();
-        Ok(guard.get(key).and_then(|v| serde_json::from_value(v.clone()).ok()))
+        Ok(guard
+            .get(key)
+            .and_then(|v| serde_json::from_value(v.clone()).ok()))
     }
     async fn set<T: serde::Serialize + Send + Sync>(
         &self,
         key: &str,
         value: T,
     ) -> Result<bool, LangGraphError> {
-        let v = serde_json::to_value(value).map_err(|e| LangGraphError::StateError(e.to_string()))?;
+        let v =
+            serde_json::to_value(value).map_err(|e| LangGraphError::StateError(e.to_string()))?;
         self.data.lock().unwrap().insert(key.to_string(), v);
         Ok(true)
     }
@@ -1094,7 +1158,9 @@ async fn test_state_dependent_conditional_routing() -> Result<(), LangGraphError
     builder.add_conditional_edge(
         "decide",
         vec![Box::new(|state: &SyncRouteState| {
-            state.get_sync("route").unwrap_or_else(|| "left".to_string())
+            state
+                .get_sync("route")
+                .unwrap_or_else(|| "left".to_string())
         })],
     );
     builder.add_edge("left", HashSet::from([END_NODE.to_string()]));
@@ -1104,7 +1170,10 @@ async fn test_state_dependent_conditional_routing() -> Result<(), LangGraphError
     let state = Arc::new(SyncRouteState::new());
     let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
 
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
     let right: Option<bool> = state.get("right_visited").await?;
     let left: Option<bool> = state.get("left_visited").await?;
     assert_eq!(right, Some(true), "right branch should be visited");
@@ -1174,7 +1243,10 @@ async fn test_node_started_finished_pairing() -> Result<(), LangGraphError> {
             _ => None,
         })
         .collect();
-    assert_eq!(started, finished, "every NodeStarted must pair with a NodeFinished");
+    assert_eq!(
+        started, finished,
+        "every NodeStarted must pair with a NodeFinished"
+    );
     assert_eq!(started.len(), 2, "two real nodes should run");
     Ok(())
 }
@@ -1246,7 +1318,9 @@ async fn test_no_step_started_for_start_step() -> Result<(), LangGraphError> {
 
     // step 1 是 __start__ 虚拟步，只有 RoutingDecision，绝不应有 StepStarted
     assert!(
-        !events.iter().any(|e| matches!(e, StreamEvent::StepStarted { step: 1, .. })),
+        !events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::StepStarted { step: 1, .. })),
         "__start__ step (1) must not emit StepStarted"
     );
     Ok(())
@@ -1269,7 +1343,10 @@ async fn test_max_steps_exact_boundary() -> Result<(), LangGraphError> {
         Some(StreamEvent::WorkflowFinished { total_steps, .. }) => {
             assert_eq!(*total_steps, 3, "should finish exactly at max_steps");
         }
-        other => panic!("expected WorkflowFinished, got {:?}", std::mem::discriminant(other.unwrap())),
+        other => panic!(
+            "expected WorkflowFinished, got {:?}",
+            std::mem::discriminant(other.unwrap())
+        ),
     }
 
     // max_steps = 2：差一步 → WorkflowError(max_steps)
@@ -1343,7 +1420,10 @@ async fn test_data_dependency_across_steps() -> Result<(), LangGraphError> {
     let state = Arc::new(DefaultMemoryState::new());
     let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
 
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
     // double 读到 init 写入的 5，写出 10
     let n2: i32 = state.get("n2").await?.unwrap_or(0);
     assert_eq!(n2, 10, "downstream node should see upstream write");
@@ -1413,7 +1493,10 @@ async fn test_exactly_one_terminal_event() -> Result<(), LangGraphError> {
     let graph = Arc::new(builder.compile()?);
     let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
     assert_eq!(count_terminal(&events), 1, "success: exactly one terminal");
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
 
     // 失败路径
     let mut builder = StateGraphBuilder::new();
@@ -1423,7 +1506,10 @@ async fn test_exactly_one_terminal_event() -> Result<(), LangGraphError> {
     let graph = Arc::new(builder.compile()?);
     let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
     assert_eq!(count_terminal(&events), 1, "failure: exactly one terminal");
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowError { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowError { .. })
+    ));
     Ok(())
 }
 
@@ -1485,7 +1571,10 @@ async fn test_workflow_started_emitted_exactly_once() -> Result<(), LangGraphErr
         .iter()
         .filter(|e| matches!(e, StreamEvent::WorkflowStarted))
         .count();
-    assert_eq!(started_count, 1, "WorkflowStarted must be emitted exactly once");
+    assert_eq!(
+        started_count, 1,
+        "WorkflowStarted must be emitted exactly once"
+    );
     Ok(())
 }
 
@@ -1503,13 +1592,22 @@ async fn test_error_variant_fidelity() -> Result<(), LangGraphError> {
     };
 
     let e_timeout = run(ErrKind::Timeout).await;
-    assert!(matches!(extract_error(&e_timeout), LangGraphError::Timeout(_)));
+    assert!(matches!(
+        extract_error(&e_timeout),
+        LangGraphError::Timeout(_)
+    ));
 
     let e_state = run(ErrKind::State).await;
-    assert!(matches!(extract_error(&e_state), LangGraphError::StateError(_)));
+    assert!(matches!(
+        extract_error(&e_state),
+        LangGraphError::StateError(_)
+    ));
 
     let e_retry = run(ErrKind::Retry).await;
-    assert!(matches!(extract_error(&e_retry), LangGraphError::RetryExhausted(_)));
+    assert!(matches!(
+        extract_error(&e_retry),
+        LangGraphError::RetryExhausted(_)
+    ));
     Ok(())
 }
 
@@ -1529,8 +1627,14 @@ async fn test_concurrent_streams_state_isolation() -> Result<(), LangGraphError>
         collect_events(Arc::clone(&graph), Arc::clone(&s1)),
         collect_events(Arc::clone(&graph), Arc::clone(&s2)),
     );
-    assert!(matches!(e1.last(), Some(StreamEvent::WorkflowFinished { .. })));
-    assert!(matches!(e2.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        e1.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
+    assert!(matches!(
+        e2.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
 
     // 每个流独立计数为 1，而非共享后的 2 → 证明状态隔离
     let c1: i32 = s1.get("count").await?.unwrap_or(0);
@@ -1592,7 +1696,11 @@ async fn test_parallel_nodes_share_step_index() -> Result<(), LangGraphError> {
         })
         .collect();
     // 两个并行节点同属 step 2
-    assert_eq!(started_steps, HashSet::from([2]), "parallel nodes share one step");
+    assert_eq!(
+        started_steps,
+        HashSet::from([2]),
+        "parallel nodes share one step"
+    );
     assert_eq!(finished_steps, HashSet::from([2]));
     Ok(())
 }
@@ -1609,7 +1717,10 @@ async fn test_node_writes_multiple_keys() -> Result<(), LangGraphError> {
 
     let state = Arc::new(DefaultMemoryState::new());
     let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
 
     let k1: i32 = state.get("k1").await?.unwrap_or(0);
     let k2: i32 = state.get("k2").await?.unwrap_or(0);
@@ -1660,7 +1771,10 @@ async fn test_routing_decision_count_linear() -> Result<(), LangGraphError> {
         .filter(|e| matches!(e, StreamEvent::RoutingDecision { .. }))
         .count();
     // __start__ 路由 + 每个真实节点路由 = N + 1 = 3
-    assert_eq!(routing_count, 3, "linear N=2 graph should have N+1 routing decisions");
+    assert_eq!(
+        routing_count, 3,
+        "linear N=2 graph should have N+1 routing decisions"
+    );
     Ok(())
 }
 
@@ -1716,7 +1830,10 @@ async fn test_slow_consumer_no_event_loss() -> Result<(), LangGraphError> {
     // N=3 线性图：3 + 4*3 = 15 个事件，一个不多一个不少
     assert_eq!(events.len(), 15, "slow consumer must not lose events");
     assert!(matches!(events.first(), Some(StreamEvent::WorkflowStarted)));
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
     Ok(())
 }
 
@@ -1740,7 +1857,11 @@ async fn test_deep_linear_chain_stress() -> Result<(), LangGraphError> {
     let state = Arc::new(DefaultMemoryState::new());
     let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
 
-    assert_eq!(events.len(), 3 + 4 * N, "event count formula must hold for deep chain");
+    assert_eq!(
+        events.len(),
+        3 + 4 * N,
+        "event count formula must hold for deep chain"
+    );
     if let Some(StreamEvent::WorkflowFinished { total_steps, .. }) = events.last() {
         assert_eq!(*total_steps, N + 2);
     } else {
@@ -1780,7 +1901,10 @@ async fn test_parallel_nodes_write_distinct_keys() -> Result<(), LangGraphError>
 
     let state = Arc::new(DefaultMemoryState::new());
     let events = collect_events(Arc::clone(&graph), Arc::clone(&state)).await;
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
 
     let x: i32 = state.get("x").await?.unwrap_or(0);
     let y: i32 = state.get("y").await?.unwrap_or(0);
@@ -1835,8 +1959,14 @@ async fn test_concurrent_streams_mixed_success_failure() -> Result<(), LangGraph
         collect_events(Arc::clone(&ok_graph), Arc::new(DefaultMemoryState::new())),
         collect_events(Arc::clone(&fail_graph), Arc::new(DefaultMemoryState::new())),
     );
-    assert!(matches!(ok_events.last(), Some(StreamEvent::WorkflowFinished { .. })));
-    assert!(matches!(fail_events.last(), Some(StreamEvent::WorkflowError { .. })));
+    assert!(matches!(
+        ok_events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
+    assert!(matches!(
+        fail_events.last(),
+        Some(StreamEvent::WorkflowError { .. })
+    ));
     Ok(())
 }
 
@@ -1862,7 +1992,10 @@ async fn test_cross_step_event_ordering() -> Result<(), LangGraphError> {
         .iter()
         .position(|e| matches!(e, StreamEvent::StepStarted { step: 3, .. }));
     match (route2, step3) {
-        (Some(r), Some(s)) => assert!(r < s, "routing of step N must precede StepStarted of step N+1"),
+        (Some(r), Some(s)) => assert!(
+            r < s,
+            "routing of step N must precede StepStarted of step N+1"
+        ),
         _ => panic!("both events should exist"),
     }
     Ok(())
@@ -1889,10 +2022,21 @@ async fn test_conditional_chain_multiple_steps() -> Result<(), LangGraphError> {
 
     let events = collect_events(graph, Arc::new(DefaultMemoryState::new())).await;
 
-    assert!(matches!(events.last(), Some(StreamEvent::WorkflowFinished { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::WorkflowFinished { .. })
+    ));
     // r1 和 r2 都应被执行
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::NodeStarted { name, .. } if name == "r1")));
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::NodeStarted { name, .. } if name == "r2")));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::NodeStarted { name, .. } if name == "r1"))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::NodeStarted { name, .. } if name == "r2"))
+    );
     // 共 3 条 RoutingDecision：start→r1, r1→r2, r2→end
     let routing_count = events
         .iter()
